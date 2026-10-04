@@ -41,25 +41,31 @@ CORE = ROOT / "native" / "wifisense_core"
 
 
 def auc(pos: np.ndarray, neg: np.ndarray) -> float:
-    """P(random positive > random negative), ties counted as half."""
+    """P(random positive > random negative), ties counted as half.
+
+    Uses the Mann-Whitney U form on average ranks. Ties are averaged with a
+    vectorised reduceat rather than a Python loop over unique values, because
+    the bootstrap below calls this thousands of times and the loop version
+    dominated the runtime.
+    """
     if len(pos) == 0 or len(neg) == 0:
         return float("nan")
-    allv = np.concatenate([pos, neg])
-    order = allv.argsort()
-    ranks = np.empty(len(allv), dtype=float)
-    ranks[order] = np.arange(1, len(allv) + 1)
-    # average ranks for ties
-    uniq, inv = np.unique(allv, return_inverse=True)
-    for u in uniq:
-        m = inv == u
-        if m.sum() > 1:
-            ranks[m] = ranks[m].mean()
-    r_pos = ranks[: len(pos)].sum()
     n1, n0 = len(pos), len(neg)
-    return float((r_pos - n1 * (n1 + 1) / 2) / (n1 * n0))
+    allv = np.concatenate([pos, neg])
+    order = np.argsort(allv, kind="stable")
+    sortedv = allv[order]
+    # boundaries of each run of equal values
+    starts = np.flatnonzero(np.r_[True, sortedv[1:] != sortedv[:-1]])
+    counts = np.diff(np.r_[starts, len(sortedv)])
+    avg_rank = starts + (counts + 1) / 2.0        # mean of 1-based ranks
+    ranks_sorted = np.repeat(avg_rank, counts)
+    ranks = np.empty(len(allv), dtype=float)
+    ranks[order] = ranks_sorted
+    r_pos = ranks[:n1].sum()
+    return float((r_pos - n1 * (n1 + 1) / 2.0) / (n1 * n0))
 
 
-def boot_ci(pos, neg, n=4000, seed=0):
+def boot_ci(pos, neg, n=2000, seed=0):
     rng = np.random.default_rng(seed)
     vals = np.empty(n)
     for i in range(n):
@@ -68,7 +74,7 @@ def boot_ci(pos, neg, n=4000, seed=0):
     return float(np.percentile(vals, 2.5)), float(np.percentile(vals, 97.5))
 
 
-def perm_p(pos, neg, n=4000, seed=0):
+def perm_p(pos, neg, n=2000, seed=0):
     """Two sided permutation test on the difference of means."""
     rng = np.random.default_rng(seed)
     obs = abs(pos.mean() - neg.mean())
@@ -91,6 +97,8 @@ def main() -> int:
     ap.add_argument("--threshold", type=float, default=3.0)
     ap.add_argument("--win", type=float, default=10.0)
     ap.add_argument("--out", default=str(OUT / "occupancy.jsonl"))
+    ap.add_argument("--analyse-only", action="store_true",
+                    help="score an existing capture instead of recording")
     args = ap.parse_args()
 
     if not CORE.exists():
@@ -119,15 +127,20 @@ def main() -> int:
     print(f"  EMPTY means: be outside the room.\n")
 
     out = Path(args.out)
-    if out.exists():
-        out.unlink()
-    proc = subprocess.Popen([str(CORE), "--iface", args.iface, "--out", str(out),
-                             "--duration", str(int(total)), "--fine-hz", "20",
-                             "--quiet"])
-    try:
-        proc.wait()
-    except KeyboardInterrupt:
-        proc.terminate()
+    if args.analyse_only:
+        if not out.exists():
+            print(f"no capture at {out}")
+            return 1
+    else:
+        if out.exists():
+            out.unlink()
+        proc = subprocess.Popen([str(CORE), "--iface", args.iface, "--out", str(out),
+                                 "--duration", str(int(total)), "--fine-hz", "20",
+                                 "--quiet"])
+        try:
+            proc.wait()
+        except KeyboardInterrupt:
+            proc.terminate()
 
     s = io.load(out)
     r = detect.detect(s, win_s=args.win, threshold=args.threshold)
@@ -163,6 +176,46 @@ def main() -> int:
     print("-" * 40)
     for i, (name, med, mean, n) in enumerate(per_block):
         print(f"{i+1:>5} {name:>9} {med:>8.2f} {mean:>8.2f} {n:>6}")
+
+    # --- blocked analysis
+    # The score ramps over the capture for reasons unrelated to occupancy, so a
+    # pooled AUC mostly measures drift. Because the design alternates, each
+    # occupied block can be compared with the empty block it is bracketed by,
+    # and each block can have its own median removed before pooling. Both
+    # cancel a slow trend that no threshold could ever work around.
+    raw = {}
+    for i, (name, _d) in enumerate(blocks):
+        raw[i] = np.array([dd.motion for dd in r.detections
+                           if marks[i + 1] <= dd.t < marks[i + 2]])
+    print("\nblocked by adjacent pair (cancels drift):")
+    diffs, pair_aucs = [], []
+    for pr in range(args.reps):
+        e_i, o_i = 2 * pr, 2 * pr + 1
+        e, o = raw[e_i], raw[o_i]
+        if len(e) < 5 or len(o) < 5:
+            continue
+        d = float(np.median(o) - np.median(e))
+        pa = auc(o, e)
+        diffs.append(d)
+        pair_aucs.append(pa)
+        print(f"  pair {pr+1}: empty {np.median(e):+6.2f} vs occupied "
+              f"{np.median(o):+6.2f}   diff {d:+6.2f}   AUC {pa:.3f}")
+    if diffs:
+        n_pos = sum(1 for d in diffs if d > 0)
+        print(f"  mean paired difference : {np.mean(diffs):+.2f} "
+              f"(positive in {n_pos}/{len(diffs)} pairs)")
+        print(f"  mean paired AUC        : {np.mean(pair_aucs):.3f}")
+
+    # remove each block's own median, then pool
+    print("\npooled after removing each block's median:")
+    dp, dn = [], []
+    for i, (name, _d) in enumerate(blocks):
+        v = raw[i] - np.median(raw[i])
+        (dp if name == "OCCUPIED" else dn).append(v)
+    dp, dn = np.concatenate(dp), np.concatenate(dn)
+    a2 = auc(dp, dn)
+    lo2, hi2 = boot_ci(dp, dn)
+    print(f"  AUC {a2:.3f}   95% CI [{lo2:.3f}, {hi2:.3f}]")
 
     if len(pos) < 5 or len(neg) < 5:
         print("not enough data")
