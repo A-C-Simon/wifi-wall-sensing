@@ -208,6 +208,142 @@ position dependence being measured.
 
 Reproduce: `python3 wifisense.py calibrate` then `validate-map`
 
+#---
+
+## Result: occupancy is not detectable either, and the pooled figure lies
+
+Three A/B pairs of 90 s blocks, alternating empty and occupied, 9.3 min total.
+
+| block | condition | median score |
+|---|---|---|
+| 1 | EMPTY | -0.80 |
+| 2 | OCCUPIED | 0.00 |
+| 3 | EMPTY | 0.17 |
+| 4 | OCCUPIED | 4.71 |
+| 5 | EMPTY | **4.85** |
+| 6 | OCCUPIED | 2.89 |
+
+Pooling every sample gives **AUC 0.640, p = 0.0005**, which reads as a weak
+but real effect. It is not real. The score ramps monotonically across the
+capture and the highest block is an *empty* one, so the pooled figure mostly
+measures the ramp.
+
+The design alternates, so the ramp can be cancelled two ways:
+
+| analysis | AUC | 95% CI |
+|---|---|---|
+| pooled, raw | 0.640 | 0.630 to 0.651 |
+| paired with the bracketing empty block | 0.699 mean | per pair 0.694 / 0.939 / 0.465 |
+| pooled after removing each block's own median | **0.456** | 0.445 to 0.467 |
+
+Once each block's baseline is removed the score carries no information about
+occupancy, and is slightly *anti*-correlated. The per-pair AUCs disagree with
+each other, so pair 2's 0.939 is noise.
+
+**The general lesson: with a drifting measurement, a pooled test will happily
+report p < 0.001 for nothing.** Any experiment on this hardware needs a
+blocked or baseline-subtracted design, and the baseline has to be collected in
+the same session as the measurement.
+
+Reproduce: `python3 validate/occupancy_test.py --block 90 --reps 3`
+
+## Why the literature agrees with these results
+
+None of the four negative results is a misconfiguration. Searching the
+literature for RSSI-only sensing on unmodified commodity hardware:
+
+- **The slowest sampling rate in any peer-reviewed commodity passive people
+  counting paper is 10 Hz** (Li et al., *Passive People Counting using Commodity
+  WiFi*), and that work uses nine CSI amplitude streams from a 3x3 array, not
+  one scalar. This machine delivers 0.083 Hz for the multi-AP channel.
+- **802.11bf use-case KPIs** (Ropitault et al., IEEE ComSoc Standards Magazine
+  2023) put presence detection at 10 to 100 ms and respiration below 50 ms.
+  The 90 s blocks used above are already far slower than the fastest KPI in
+  the standard.
+- **Indoor RSSI decorrelates in single-digit milliseconds under motion.**
+  Coherence time at 1 m/s is about 6 ms at 2.4 GHz and 3 ms at 5 GHz. A 2 to
+  4 s walking event sampled every 12.1 s gives roughly a one in twelve chance
+  of being observed at all, quantised to a single integer step, on a signal
+  whose entire usable span is about 6 dB. That is event-limited, and no
+  threshold placement recovers it.
+- **1 dB quantisation is a studied limiter.** Luong, Zhou and Cummings,
+  *RSS Step Size: 1 dB is not Enough!* (Utah SPAN) show that with 1 dB steps
+  "the disruption either may not be measured at all, or the spectral features
+  calculated from the quantized RSS may be too noisy", and that breathing
+  estimation needs roughly 12 bits. WiRSSI (arXiv:2602.14004) independently
+  notes RSSI carries "about 0.5 to 1 dB" integer steps and that "the Doppler
+  extracted from RSSI ... is strongly affected by coarse amplitude
+  quantization".
+- **The sign of an RSSI change is not informative.** Depatla and Mostofi's own
+  framework has two competing mechanisms, LOS blockage reducing power and
+  multipath scattering increasing it, which is why their methods use
+  *distributional* statistics over many events rather than any mean or
+  variance over a short window. That is exactly what "walking scores below
+  empty" looks like.
+- **Radio map drift is documented and large.** *Sensors* 2024 (PMC10903848)
+  measures RSSI correlated with indoor relative humidity at r = -0.78 on
+  2.4 GHz and r = -0.81 on 5 GHz, with the offset growing over ten months with
+  no human movement at all. The 40 dB of drift measured here over 15 minutes
+  is the same phenomenon at a shorter timescale.
+- **The one published RSSI-only motion result that is both fast and accurate
+  is 5.69 s mean latency** (Korany and Mostofi, *Nocturnal Seizure Detection
+  Using Off-the-Shelf WiFi*, IEEE IoT-J 2021, arXiv:2103.13556: 93.85%
+  detection, PFA 0.0097). Its "off the shelf" means off the shelf NICs in a
+  purpose-deployed transmitter and receiver pair, not the NIC already inside
+  the laptop.
+
+### MCS and transmit rate as a sensing channel
+
+Worth ruling out explicitly, since it looks promising: `transmitRate()` is
+fast to read and reacts to instantaneous SINR. It is a dead end here for two
+reasons. No published work uses link rate adaptation as a sensing signal; in
+the CSI literature it is consistently treated as a *nuisance* to be removed,
+named as a source of amplitude impulse noise in CARM (MobiCom 2015). And at
+-55 dBm against -88 dBm noise the link has 33 dB of SNR on 80 MHz 5 GHz, so
+rate adaptation is pinned against its ceiling with no headroom. A single
+static level is what a saturated link looks like.
+
+### Two unquantified confounds
+
+- **AWDL.** `awdl0` is up and running on this host. Apple's peer to peer radio
+  shares the WiFi hardware and is documented to pull the NIC off channel, and
+  the 12.1 s scan interval may be partly an artefact of that contention rather
+  than a floor. Not tested, because disabling it needs root and altering the
+  host's network configuration was out of scope. The measurement in this
+  README should be read as an upper bound on the scan rate, not a proven floor.
+- **Scan staleness.** A round robin sweep hears access points on different
+  channels at different moments, so a vector assembled across channels is not
+  internally time coherent, and entries for access points not heard in a given
+  round may be carried over from the driver cache. macOS exposes no per
+  access point timestamp, so this cannot be corrected from userspace.
+  *Computer Communications* 2024 ("Last seen time is critical") makes the same
+  point about RSSI indoor localisation generally.
+
+## What would actually work
+
+Ranked by measured evidence rather than by how good the idea sounds:
+
+1. **An ESP32-S2 or S3 running 802.11mc fine timing measurement.** WiFine
+   (Nikseresht et al., DCOSS-IoT 2023) reports **95.8% occupancy accuracy on
+   single antenna commodity WiFi**, with 8 hours of data and a sampling
+   requirement 10x lower than a CSI baseline. This is the best single radio
+   result in the area and it needs no CSI at all. CoreWLAN exposes no ranging
+   API, so this is not reachable from macOS.
+2. **An ESP32-S3 for CSI**, at 20 to 100 Hz. Hernandez et al. (ICC 2021)
+   report perfect detection and false alarm rates over 120 s windows.
+3. **A second radio you control**, Atheros AR9580 or an Intel 5300 under
+   Linux, for full CSI at 100 to 2500 Hz. Every strong RSSI-only result in the
+   Depatla and Mostofi lineage is literally this setup.
+4. **Accept 0.083 Hz and change the task** to quasi-static "is anyone home"
+   over 5 to 30 minute windows, same-session calibration only, with humidity
+   as a modelled covariate. Do not expect it to survive re-deployment on
+   another day.
+
+The sensing code here ports across to any of these. `features.py` and
+`radiomap.py` consume a samples by anchors matrix regardless of whether the
+values came from CSI, FTM or RSSI. What cannot port is the acquisition layer,
+and that is the whole problem.
+
 ### What the system does about it
 
 `validate-map` writes a verdict into the map, and **the radar refuses to
