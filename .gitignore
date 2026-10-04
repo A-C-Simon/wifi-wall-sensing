@@ -4,10 +4,8 @@ out/
 # Compiled artefacts
 native/wifisense_core
 probe/probe
-probe/exp2
 probe/exp3
 probe/exp4
-probe/exp5
 probe/exp6
 probe/exp7
 
