@@ -347,6 +347,19 @@ validate/score.py             scoring against a known schedule
 probe/                        the feasibility experiments (exp1-exp7)
 ```
 
-`probe/` is kept deliberately: those experiments are what produced the
-capability table above, and re-running them is how you check the numbers on a
-different machine.
+`probe/` is kept deliberately: those experiments produced the capability table
+above, and re-running them is how you check the numbers on a different machine.
+
+Two earlier drafts are not in the repository. One drove traffic from a raw UDP
+socket, which cannot work here because a utun interface owns the default route
+and `connect()` to the LAN gateway fails; ICMP replaced it in exp3. The other
+measured the same accessor timings as exp6 and was superseded when it crashed.
+Neither contributed a finding that the kept experiments do not cover.
+
+## Commit layout
+
+One commit per idea, roughly in the order the ideas were needed. The probe
+commits establish what the hardware can do, the sensing commits implement
+against those limits, and the validation commits try to prove the result. The
+last validation commits report failures, which is why the README leads with
+limits rather than features.
