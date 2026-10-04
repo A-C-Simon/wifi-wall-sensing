@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Entry point for the radar display: parse arguments, run the view."""
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
+
+from common import CORE, OUT
+from radar_view import Blips, Radar
+from wifisense_live import State, reader
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--iface", default="en0")
+    ap.add_argument("--mode", choices=["monitor", "walktest"], default="monitor")
+    ap.add_argument("--lead", type=int, default=20,
+                    help="seconds before phase 1, to read the schedule")
+    ap.add_argument("--empty", type=int, default=40)
+    ap.add_argument("--walk", type=int, default=60)
+    ap.add_argument("--still", type=int, default=40)
+    ap.add_argument("--threshold", type=float, default=3.0)
+    ap.add_argument("--win", type=float, default=10.0)
+    ap.add_argument("--room-x", type=float, default=7.0)
+    ap.add_argument("--room-y", type=float, default=6.0)
+    ap.add_argument("--laptop-x", type=float, default=1.0)
+    ap.add_argument("--laptop-y", type=float, default=1.0)
+    ap.add_argument("--router-range", type=float, default=4.0)
+    ap.add_argument("--router-bearing", type=float, default=315.0,
+                    help="degrees clockwise from north, laptop -> router "
+                         "(315 = NW, 0 = N, 90 = E)")
+    ap.add_argument("--router-rssi", type=float, default=-55.0,
+                    help="measured RSSI of the router at the laptop")
+    ap.add_argument("--pathloss", type=float, default=2.7)
+    ap.add_argument("--radiomap", default=None)
+    args = ap.parse_args()
+
+    if not CORE.exists():
+        subprocess.run(["swiftc", "-O", "-framework", "CoreWLAN", "-o", str(CORE),
+                        str(ROOT / "native" / "wifisense_core.swift")], check=True)
+
+    r = Radar(args)
+    cap = OUT / f"radar_{args.mode}.jsonl"
+    if cap.exists():
+        cap.unlink()
+
+    dur = 10 ** 6
+    phases = []
+    if args.mode == "walktest":
+        a, b, c = float(args.empty), float(args.walk), float(args.still)
+        lead = float(args.lead)
+        dur = lead + a + b + c + args.empty
+        phases = [(lead, "GET READY\nread the schedule, then stay out of the area"),
+                  (a, "PHASE 1 - EMPTY\nstay out of the sensing area"),
+                  (b, "PHASE 2 - WALK\nwalk across the area, back and forth"),
+                  (c, "PHASE 3 - STAND STILL\nstop moving"),
+                  (float(args.empty), "PHASE 4 - EMPTY\nleave the area")]
+
+    proc = subprocess.Popen([str(CORE), "--iface", args.iface, "--out", str(cap),
+                             "--duration", str(dur), "--fine-hz", "20", "--quiet"])
+    threading.Thread(target=reader, args=(cap, r.st, {}), daemon=True).start()
+    time.sleep(0.4)
+    r.st.start = time.time()
+    print(f"radar capture -> {cap}")
+    if not r.rmap or not r.rmap.points:
+        print("NOTE: no radio map yet, so the radar will show anchor evidence "
+              "only. Build one with:  python3 wifisense.py calibrate")
+
+    def sched():
+        for dur_i, label in phases:
+            r.st.phase, r.st.phase_total = label, dur_i
+            end = r.st.elapsed() + dur_i
+            while r.st.elapsed() < end and proc.poll() is None:
+                r.st.phase_left = end - r.st.elapsed()
+                time.sleep(0.1)
+        r.st.phase = ""
+    if phases:
+        threading.Thread(target=sched, daemon=True).start()
+
+    from matplotlib.animation import FuncAnimation
+    anim = FuncAnimation(r.fig, r.update, interval=200, cache_frame_data=False)
+    try:
+        plt.show()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        r.st.stop = True
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        print(f"capture saved: {cap}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
