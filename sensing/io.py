@@ -62,6 +62,17 @@ def _key(ch: int, w: int) -> str:
     return f"{ch}/{w}"
 
 
+def scan_aps(rows: list[dict]) -> dict[str, int]:
+    """Collapse redacted co-channel APs by strongest RSSI, independent of order."""
+    aps = {}
+    for row in rows:
+        key = _key(row["ch"], row["w"])
+        value = row["rssi"]
+        if math.isfinite(value) and value < 0:
+            aps[key] = max(aps.get(key, value), value)
+    return aps
+
+
 def load(path: str | Path, dedupe_sweeps: bool = True) -> Session:
     """Parse a capture file.
 
@@ -91,11 +102,15 @@ def load(path: str | Path, dedupe_sweeps: bool = True) -> Session:
                     t=o["t"], n=o["n"], rssi=o["rssi"], mn=o["min"], mx=o["max"],
                     sd=o["sd"], chg=o["chg"], noise=o["noise"], rate=o["rate"]))
             elif t == "sweep":
-                aps = {_key(a["ch"], a["w"]): a["rssi"] for a in o["aps"]}
+                aps = scan_aps(o["aps"])
                 s.sweeps.append(Sweep(t=o["t"], cost_ms=o.get("cost_ms", 0.0), aps=aps))
             elif t == "stats":
                 s.stats.append(o)
 
+    # Concurrent workers can finish writes out of timestamp order. Keep the
+    # time axes monotonic before differencing or resampling them.
+    s.fine.sort(key=lambda f: f.t)
+    s.sweeps.sort(key=lambda sw: sw.t)
     if dedupe_sweeps:
         burst_gap = 1.0
         kept: list[Sweep] = []

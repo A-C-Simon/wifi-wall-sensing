@@ -37,7 +37,7 @@ from matplotlib.patches import FancyBboxPatch  # noqa: E402
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from sensing import detect, features as F  # noqa: E402
+from sensing import detect, features as F, io  # noqa: E402
 from common import build_core  # noqa: E402
 
 OUT = ROOT / "out"
@@ -112,9 +112,16 @@ def reader(path: Path, st: State, proc_holder: dict) -> None:
                 time.sleep(0.05)
                 continue
             fh = open(path)
+        position = fh.tell()
         line = fh.readline()
         if not line:
             time.sleep(0.02)
+            continue
+        if not line.endswith("\n"):
+            # A writer may be midway through a record. Retry from its start
+            # instead of dropping the fragment and the rest of the record.
+            fh.seek(position)
+            time.sleep(.02)
             continue
         line = line.strip()
         if not line:
@@ -138,14 +145,21 @@ def reader(path: Path, st: State, proc_holder: dict) -> None:
                 st.fine_sd.append(o["sd"])
                 st.fine_chg.append(o["chg"])
             elif kind == "sweep":
-                aps = {f"{a['ch']}/{a['w']}": a["rssi"] for a in o["aps"]}
+                aps = io.scan_aps(o["aps"])
+                if st.sweeps and o["t"] - st.sweeps[-1][0] < 1.0:
+                    if len(aps) > len(st.sweeps[-1][1]):
+                        st.sweeps[-1] = (o["t"], aps)
+                    continue
                 st.sweeps.append((o["t"], aps))
                 if len(st.sweeps) > 400:
                     st.sweeps.pop(0)
                 keys = {k for _t, m in st.sweeps[-6:] for k in m}
                 st.ap_keys = sorted(keys)
             elif kind == "stats":
-                st.meta.setdefault("raw_rate_hz", o.get("raw_rate_hz"))
+                if "raw_rate_hz" in o:
+                    st.meta["raw_rate_hz"] = o["raw_rate_hz"]
+    if fh is not None:
+        fh.close()
 
 
 def scores(snap: dict, win_s: float, calibration=None) -> tuple[np.ndarray, np.ndarray]:
