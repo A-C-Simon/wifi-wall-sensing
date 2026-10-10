@@ -13,7 +13,7 @@ import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 
-from common import CORE, OUT
+from common import CORE, OUT, build_core
 from radar_view import Blips, Radar
 from wifisense_live import State, reader
 
@@ -43,9 +43,7 @@ def main() -> int:
     ap.add_argument("--radiomap", default=None)
     args = ap.parse_args()
 
-    if not CORE.exists():
-        subprocess.run(["swiftc", "-O", "-framework", "CoreWLAN", "-o", str(CORE),
-                        str(ROOT / "native" / "wifisense_core.swift")], check=True)
+    build_core()
 
     r = Radar(args)
     cap = OUT / f"radar_{args.mode}.jsonl"

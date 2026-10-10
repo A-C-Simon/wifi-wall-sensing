@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import numpy as np
 
-from sensing import io, radiomap
+from sensing import io, linkmodel, radiomap
 from sensing.features import _fill_columns
 
 from common import CORE, OUT, ROOT, build_core

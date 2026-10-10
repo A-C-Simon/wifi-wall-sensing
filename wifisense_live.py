@@ -38,6 +38,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from sensing import features as F  # noqa: E402
+from common import build_core  # noqa: E402
 
 OUT = ROOT / "out"
 CORE = ROOT / "native" / "wifisense_core"
@@ -349,9 +350,7 @@ def main() -> int:
     ap.add_argument("--win", type=float, default=10.0)
     args = ap.parse_args()
 
-    if not CORE.exists():
-        subprocess.run(["swiftc", "-O", "-framework", "CoreWLAN", "-o", str(CORE),
-                        str(ROOT / "native" / "wifisense_core.swift")], check=True)
+    build_core()
 
     st = State()
     st.win_s = args.win

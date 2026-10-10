@@ -11,11 +11,7 @@ import numpy as np
 
 from sensing import detect, io, viz
 
-from common import CORE, OUT, ROOT, build_core
-
-
-def default_iface() -> str:
-    return os.environ.get("WIFISENSE_IFACE", "en0")
+from common import CORE, OUT, ROOT, build_core, default_iface
 
 
 # --------------------------------------------------------------------- doctor
