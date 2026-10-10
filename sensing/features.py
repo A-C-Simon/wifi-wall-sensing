@@ -165,6 +165,23 @@ def sweep_features(sweep_t: np.ndarray, matrix: np.ndarray) -> np.ndarray:
     return np.column_stack([l1, l2, changed.astype(float)])
 
 
+def hold_sweeps(t: np.ndarray, sweep_t: np.ndarray, values: np.ndarray,
+                max_age: float) -> np.ndarray:
+    """Hold each sweep statistic from its timestamp until it expires.
+
+    Before the first completed interval there is no evidence. At an exact
+    timestamp the new statistic applies, never the previous one.
+    """
+    out = np.zeros(len(t), dtype=float)
+    if not len(sweep_t):
+        return out
+    idx = np.searchsorted(sweep_t, t, side="right") - 1
+    safe = np.maximum(idx, 0)
+    valid = (idx >= 0) & (t - sweep_t[safe] < max_age)
+    out[valid] = values[safe[valid]]
+    return out
+
+
 def zscore_robust(x: np.ndarray) -> np.ndarray:
     """Median/MAD standardisation, NaN-safe.
 

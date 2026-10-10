@@ -104,15 +104,14 @@ def motion_score(session, win_s: float = 10.0, min_sweep_l1: float = 3.0):
                 l1 = sf[:, 0]
                 l1z = F.ratio_score(l1)
                 se = st[1:]
-                idx = np.clip(np.searchsorted(se, ft) - 1, 0, len(l1z) - 1)
-                near = np.abs(se[idx] - ft) < max(2.0 * interval, 10.0)
                 # The sweep statistic is a z-score over only n_intervals
                 # samples and is then held constant for ~12 s. With too little
                 # history it is statistically meaningless yet would dominate
                 # hundreds of fine buckets, so fade it in as evidence accrues.
                 w = min(1.0, len(l1z) / 12.0)
-                sweep_score[near] = w * l1z[idx[near]]
-                sweep_l1[near] = l1[idx[near]]
+                max_age = max(2.0 * interval, 10.0)
+                sweep_score = F.hold_sweeps(ft, se, w * l1z, max_age)
+                sweep_l1 = F.hold_sweeps(ft, se, l1, max_age)
 
     motion = np.maximum(fine_score, sweep_score)
     # Both terms are robust z-scores, so they are directly comparable and the

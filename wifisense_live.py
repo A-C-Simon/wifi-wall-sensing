@@ -167,9 +167,9 @@ def scores(snap: dict, win_s: float) -> tuple[np.ndarray, np.ndarray]:
         if len(sf):
             l1z = F.ratio_score(sf[:, 0])
             se = st_[1:]
-            idx = np.clip(np.searchsorted(se, t) - 1, 0, len(l1z) - 1)
-            near = np.abs(se[idx] - t) < 24.0
-            sweep[near] = min(1.0, len(l1z) / 12.0) * l1z[idx[near]]
+            interval = float(np.median(np.diff(st_)))
+            sweep = F.hold_sweeps(t, se, min(1.0, len(l1z) / 12.0) * l1z,
+                                  max(2.0 * interval, 10.0))
     return t, np.maximum(fine, sweep)
 
 
