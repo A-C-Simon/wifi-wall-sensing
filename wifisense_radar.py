@@ -64,7 +64,7 @@ def main() -> int:
 
     proc = subprocess.Popen([str(CORE), "--iface", args.iface, "--out", str(cap),
                              "--duration", str(dur), "--fine-hz", "20", "--quiet"])
-    threading.Thread(target=reader, args=(cap, r.st, {}), daemon=True).start()
+    threading.Thread(target=reader, args=(cap, r.st, {"proc": proc}), daemon=True).start()
     if not r.st.ready.wait(timeout=10):
         r.st.stop = True
         proc.terminate()

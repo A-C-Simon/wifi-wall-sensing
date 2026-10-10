@@ -4,6 +4,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from sensing import io
 
@@ -40,3 +41,25 @@ class CaptureIOTests(unittest.TestCase):
                 st.stop = True
                 worker.join(2)
             self.assertFalse(worker.is_alive())
+
+    def test_reader_reports_process_exit_without_hanging(self):
+        from wifisense_live import State, reader
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "capture"
+            path.write_text('{"type": "meta"}\n')
+            st = State()
+            process = Mock(returncode=2)
+            process.poll.return_value = 2
+            reader(path, st, {"proc": process})
+            self.assertEqual(st.error, "capture ended (exit 2)")
+            self.assertFalse(st.snapshot()["fresh"])
+
+    def test_stale_samples_are_not_current_evidence(self):
+        from wifisense_live import State
+        st = State()
+        st.start = 100
+        st.fine_t.append(5)
+        with patch("wifisense_live.time.monotonic", return_value=105.5):
+            self.assertTrue(st.snapshot()["fresh"])
+        with patch("wifisense_live.time.monotonic", return_value=107):
+            self.assertFalse(st.snapshot()["fresh"])

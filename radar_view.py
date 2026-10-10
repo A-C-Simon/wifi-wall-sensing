@@ -173,11 +173,10 @@ class Radar:
     def update(self, _f=None):
         st = self.st
         snap = st.snapshot()
-        st.meta = snap["meta"]
         now = st.elapsed()
         t, motion = scores(snap, st.win_s, st.calibration)
         cur = float(motion[-1]) if len(motion) else 0.0
-        occ = bool(cur >= st.threshold)
+        occ = bool(snap["fresh"] and len(motion) and cur >= st.threshold)
 
         # New data point only when macOS published a genuinely new scan.
         if snap["sweeps"] and snap["sweeps"][-1][0] > self._last_sweep:
@@ -423,7 +422,7 @@ class Radar:
                                    transform=a.transAxes,
                                    facecolor=RED if occ else "#1f7a4d",
                                    edgecolor="none"))
-        a.text(0.0625, 0.52, "MOTION" if occ else "CLEAR",
+        a.text(0.0625, 0.52, "NO DATA" if not snap["fresh"] else "MOTION" if occ else "CLEAR",
                transform=a.transAxes, ha="center", va="center",
                fontsize=14, fontweight="bold", color="white")
         # zone 2: readout, x 0.17-0.60
@@ -480,7 +479,10 @@ class Radar:
         # ---- footer band
         a = self.ax_foot
         a.clear(); a.axis("off")
-        if self.rmap and self.rmap.points and not self.map_ok:
+        if snap["error"]:
+            a.text(0.0, 0.3, snap["error"], transform=a.transAxes,
+                   color=AMBER, fontsize=9, va="center")
+        elif self.rmap and self.rmap.points and not self.map_ok:
             a.text(0.0, 0.55,
                    "RED DOT = TOP-1 MATCH, NOT A MEASURED POSITION",
                    transform=a.transAxes, color=RED, fontsize=9.5,

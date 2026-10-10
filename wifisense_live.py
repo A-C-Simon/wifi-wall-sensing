@@ -87,6 +87,8 @@ class State:
         arrays in separate critical sections would yield mismatched lengths.
         """
         with self.lock:
+            fresh = (bool(self.fine_t) and self.error is None
+                     and -.1 <= self.elapsed() - self.fine_t[-1] <= 1.0)
             return {
                 "t": np.array(self.fine_t),
                 "rssi": np.array(self.fine_rssi),
@@ -97,6 +99,9 @@ class State:
                 "sweeps": [(x[0], dict(x[1])) for x in self.sweeps[-60:]],
                 "keys": list(self.ap_keys),
                 "meta": dict(self.meta),
+                "fresh": fresh,
+                "error": self.error if self.error else
+                         None if fresh else "waiting for fresh RSSI samples",
             }
 
     def elapsed(self) -> float:
@@ -106,18 +111,32 @@ class State:
 def reader(path: Path, st: State, proc_holder: dict) -> None:
     """Tail the capture file and update state. Never blocks the GUI."""
     fh = None
+    def capture_ended():
+        proc = proc_holder.get("proc")
+        if proc is not None and proc.poll() is not None:
+            with st.lock:
+                st.error = f"capture ended (exit {proc.returncode})"
+            return True
+        return False
+
     while not st.stop:
         if fh is None:
             if not path.exists():
+                if capture_ended():
+                    break
                 time.sleep(0.05)
                 continue
             fh = open(path)
         position = fh.tell()
         line = fh.readline()
         if not line:
+            if capture_ended():
+                break
             time.sleep(0.02)
             continue
         if not line.endswith("\n"):
+            if capture_ended():
+                break
             # A writer may be midway through a record. Retry from its start
             # instead of dropping the fragment and the rest of the record.
             fh.seek(position)
@@ -221,7 +240,7 @@ class Dash:
             a.tick_params(labelsize=7.5)
 
     # ---------------------------------------------------------------- header
-    def _header(self, motion_now: float, occupied: bool):
+    def _header(self, motion_now: float, occupied: bool, available: bool = True):
         a = self.ax_state
         a.clear(); a.axis("off")
         a.add_patch(FancyBboxPatch((0.005, 0.30), 0.20, 0.42,
@@ -229,7 +248,7 @@ class Dash:
                                     transform=a.transAxes,
                                     facecolor=ALERT if occupied else IDLE,
                                     edgecolor="none"))
-        a.text(0.105, 0.51, "MOTION" if occupied else "CLEAR",
+        a.text(0.105, 0.51, "NO DATA" if not available else "MOTION" if occupied else "CLEAR",
                transform=a.transAxes, ha="center", va="center",
                fontsize=17, fontweight="bold",
                color="white")
@@ -272,10 +291,9 @@ class Dash:
     def update(self, _frame=None):
         st = self.st
         snap = st.snapshot()
-        st.meta = snap["meta"]
         t, motion = scores(snap, st.win_s, st.calibration)
-        occ = bool(len(motion) and motion[-1] >= st.threshold)
-        self._header(float(motion[-1]) if len(motion) else 0.0, occ)
+        occ = bool(snap["fresh"] and len(motion) and motion[-1] >= st.threshold)
+        self._header(float(motion[-1]) if len(motion) else 0.0, occ, snap["fresh"])
 
         now = st.elapsed()
         t0 = max(0.0, now - SPAN_S)
@@ -399,7 +417,7 @@ def main() -> int:
 
     proc = subprocess.Popen([str(CORE), "--iface", args.iface, "--out", str(cap),
                              "--duration", str(dur), "--fine-hz", "20", "--quiet"])
-    threading.Thread(target=reader, args=(cap, st, {}), daemon=True).start()
+    threading.Thread(target=reader, args=(cap, st, {"proc": proc}), daemon=True).start()
     if not st.ready.wait(timeout=10):
         st.stop = True
         proc.terminate()
