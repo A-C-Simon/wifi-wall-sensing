@@ -94,6 +94,14 @@ def separability_report(rm, raw_dir: Path, cells) -> str:
     import numpy as np
     from sensing.features import _fill_columns
 
+    if len(rm.points) < 2:
+        return "  (need at least two cells to measure separability)"
+    matrix = rm.matrix()
+    shared = np.all(np.isfinite(matrix), axis=0)
+    if shared.sum() < max(5, int(np.ceil(len(rm.keys) / 2))):
+        return "  (insufficient shared measured anchors to judge separability)"
+    keys = [k for k, keep in zip(rm.keys, shared) if keep]
+
     # within-cell temporal noise
     noise = []
     for x, y in cells:
@@ -103,8 +111,10 @@ def separability_report(rm, raw_dir: Path, cells) -> str:
         s = io.load(f)
         if len(s.sweeps) < 2:
             continue
-        mat = np.array([[float(sw.aps.get(k, np.nan)) for k in rm.keys]
+        mat = np.array([[float(sw.aps.get(k, np.nan)) for k in keys]
                         for sw in s.sweeps], dtype=float)
+        if not np.all(np.isfinite(mat)):
+            continue
         fil = _fill_columns(mat)
         d = np.abs(np.diff(fil, axis=0)).sum(axis=1)
         if len(d):
@@ -114,13 +124,9 @@ def separability_report(rm, raw_dir: Path, cells) -> str:
     wn = float(np.median(noise))
 
     # between-cell distances between cell means
-    mat = _fill_columns(rm.matrix())
-    D = np.abs(mat[:, None, :] - mat[None, :, :]).sum(axis=2)
-    np.fill_diagonal(D, np.inf)
-    closest = float(D.min())
-    med = float(np.median(D[np.isfinite(D)]))
+    closest, mean = radiomap.pairwise_summary(matrix[:, shared])
 
-    ratio = closest / wn if wn > 1e-9 else float("inf")
+    ratio = closest / max(wn, 1e-9)
     verdict = ("USABLE" if ratio >= 2.0 else
                "MARGINAL - expect frequent cell confusion" if ratio >= 1.2 else
                "NOT SEPARABLE - cells are within the noise; localisation "
@@ -129,7 +135,7 @@ def separability_report(rm, raw_dir: Path, cells) -> str:
         "cell separability",
         f"  within-cell temporal noise (median) : {wn:.1f} dB summed",
         f"  closest pair of cells              : {closest:.1f} dB",
-        f"  median pair of cells               : {med:.1f} dB",
+        f"  mean pair of cells                 : {mean:.1f} dB",
         f"  separability ratio                 : {ratio:.2f}",
         f"  verdict                            : {verdict}",
     ]
@@ -184,6 +190,9 @@ def cmd_coarsen(args) -> int:
         return 1
 
     step = args.extent
+    if not np.isfinite(step) or step <= 0:
+        print("coarse cell size must be finite and positive")
+        return 1
     ys = sorted({round(p.y, 3) for p in fine.points})
     xs = sorted({round(p.x, 3) for p in fine.points})
     # Index arithmetic, not float accumulation: accumulating step in a while
@@ -191,13 +200,15 @@ def cmd_coarsen(args) -> int:
     # produced a single region instead of a grid.
     nx = int(round((xs[-1] - xs[0]) / step)) + 1
     ny = int(round((ys[-1] - ys[0]) / step)) + 1
-    centers = [(round(xs[0] + i * step, 3), round(ys[0] + j * step, 3))
-               for j in range(ny) for i in range(nx)]
-    print(f"coarse grid {nx}x{ny} at {step:.1f} m spacing -> {len(centers)} candidate regions")
+    print(f"coarse grid {nx}x{ny} at {step:.1f} m spacing -> {nx * ny} candidate regions")
 
     buckets: dict[tuple[float, float], list[radiomap.Fingerprint]] = {}
     for p in fine.points:
-        c = min(centers, key=lambda c: (p.x - c[0]) ** 2 + (p.y - c[1]) ** 2)
+        # Nearest centre along each axis is independent. Halfway ties go to
+        # the lower centre, matching the previous exhaustive grid search.
+        ix = min(nx - 1, max(0, int(np.ceil((p.x - xs[0]) / step - .5))))
+        iy = min(ny - 1, max(0, int(np.ceil((p.y - ys[0]) / step - .5))))
+        c = (round(xs[0] + ix * step, 3), round(ys[0] + iy * step, 3))
         buckets.setdefault(c, []).append(p)
 
     out: list[radiomap.Fingerprint] = []
@@ -227,32 +238,9 @@ def cmd_coarsen(args) -> int:
     viz.plot_radio_map(rm, str(OUT / "radiomap_coarse.png"))
     print(f"\nwrote {mp}  ({len(out)} regions x {len(keys)} anchors)")
 
-    # separability, using the same within-cell noise measured during the survey
-    raw_dir = OUT / "calib_raw"
-    noise = []
-    for x, y in cells_of(fine):
-        f = raw_dir / f"cell_{x:.1f}_{y:.1f}.jsonl"
-        if not f.exists():
-            continue
-        s_ = io.load(f)
-        if len(s_.sweeps) < 2:
-            continue
-        import numpy as np
-        from sensing.features import _fill_columns
-        mat = np.array([[float(sw.aps.get(k, np.nan)) for k in rm.keys]
-                        for sw in s_.sweeps], dtype=float)
-        d = np.abs(np.diff(_fill_columns(mat), axis=0)).sum(axis=1)
-        if len(d):
-            noise.append(float(np.median(d)))
-    if noise:
-        wn = sorted(noise)[len(noise) // 2]
-        import numpy as np
-        M = _fill_columns(rm.matrix())
-        D = np.abs(M[:, None, :] - M[None, :, :]).sum(axis=2)
-        np.fill_diagonal(D, np.inf)
-        print(f"\ncoarse separability: within-cell noise {wn:.1f} dB, "
-              f"closest region pair {D.min():.1f} dB, ratio {D.min()/wn:.2f}")
-        print("verdict:", "USABLE" if D.min() / wn >= 2 else "still not separable")
+    report = separability_report(rm, OUT / "calib_raw", cells_of(fine))
+    print("\n" + report)
+
     return 0
 
 
