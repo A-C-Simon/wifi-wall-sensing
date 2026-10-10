@@ -31,19 +31,32 @@ class LinkModel:
     samples: int = 0
     note: str = ""
 
+    def __post_init__(self):
+        if not math.isfinite(self.A) or not math.isfinite(self.n) or self.n <= 0:
+            raise ValueError("link model needs finite A and a positive finite path-loss exponent")
+
     def rssi_at(self, d: float) -> float:
-        return self.A - 10.0 * self.n * math.log10(max(d, 1e-3))
+        if not math.isfinite(d) or d <= 0:
+            raise ValueError("distance must be finite and positive")
+        return self.A - 10.0 * self.n * math.log10(d)
 
     def range_of(self, rssi: float) -> float:
         """Invert the model. Ill-conditioned when few samples were fitted:
         both A and n trade off against each other, so the result is only as
         good as the survey that produced it."""
+        if not math.isfinite(rssi):
+            raise ValueError("RSSI must be finite")
         arg = (self.A - rssi) / (10.0 * self.n)
-        return float(max(10.0 ** arg, 0.05))
+        # Extreme extrapolation may exceed floating-point range. Returning
+        # infinity lets a caller cap its display without an overflow crash.
+        return float(max(10.0 ** arg, 0.05)) if arg <= 308 else float("inf")
 
     def fit(self, dists: list[float], rssis: list[float]) -> "LinkModel":
         """Least-squares fit of RSSI = A - 10 n log10(d)."""
-        pts = [(d, r) for d, r in zip(dists, rssis) if d > 0 and r < 0]
+        if len(dists) != len(rssis):
+            raise ValueError("distance and RSSI counts must match")
+        pts = [(d, r) for d, r in zip(dists, rssis)
+               if math.isfinite(d) and math.isfinite(r) and d > 0 and r < 0]
         if len(pts) < 2:
             raise ValueError("need at least 2 (distance, rssi) pairs")
         xs = [math.log10(d) for d, _ in pts]
@@ -57,8 +70,11 @@ class LinkModel:
             raise ValueError("all distances identical - move between points")
         slope = sxy / sxx                 # dB per decade == -10 n
         a = my - slope * mx
+        exponent = -slope / 10.0
+        if not math.isfinite(a) or not math.isfinite(exponent) or exponent <= 1e-9:
+            raise ValueError("RSSI must decrease with distance; cannot fit a positive path-loss exponent")
         self.A = a
-        self.n = -slope / 10.0
+        self.n = exponent
         self.samples = n_
         resid = [y - (a + slope * x) for x, y in zip(xs, ys)]
         rmse = math.sqrt(sum(r * r for r in resid) / n_)
@@ -81,7 +97,8 @@ def estimate_uncertainty(model: LinkModel, rssi: float,
                          n_range=(2.0, 4.0)) -> tuple[float, float]:
     """Range of distances consistent with one RSSI reading, sweeping the
     plausible path-loss exponent. This is the honest error bar to show."""
-    lo = min(model.range_of(rssi) if False else
-             10 ** ((model.A - rssi) / (10.0 * n)) for n in n_range)
-    hi = max(10 ** ((model.A - rssi) / (10.0 * n)) for n in n_range)
+    if not n_range:
+        raise ValueError("need at least one path-loss exponent")
+    distances = [LinkModel(A=model.A, n=n).range_of(rssi) for n in n_range]
+    lo, hi = min(distances), max(distances)
     return float(min(lo, hi)), float(max(lo, hi))
