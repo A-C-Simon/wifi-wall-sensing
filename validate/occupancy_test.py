@@ -88,6 +88,36 @@ def perm_p(pos, neg, n=2000, seed=0):
     return float((cnt + 1) / (n + 1))
 
 
+def paired_summary(empty_blocks, occupied_blocks, n=2000, seed=0):
+    """Infer across A/B pairs, never across correlated fine buckets.
+
+    Adjacent buckets share sliding windows and held sweep values. Replicating
+    those buckets must not narrow a confidence interval or lower a p-value.
+    """
+    pairs = [(np.asarray(e), np.asarray(o))
+             for e, o in zip(empty_blocks, occupied_blocks) if len(e) and len(o)]
+    if len(pairs) < 2:
+        return {}
+    effects = np.array([np.median(o) - np.median(e) for e, o in pairs])
+    aucs = np.array([auc(o, e) for e, o in pairs])
+    rng = np.random.default_rng(seed)
+    bootstrap = rng.choice(aucs, size=(n, len(pairs)), replace=True).mean(axis=1)
+    # Exact two-sided sign-flip test for modest pair counts. This quantifies
+    # consistency under exchangeable pairs, not immunity to fixed-order drift.
+    count = len(pairs)
+    if count <= 16:
+        signs = 1 - 2 * ((np.arange(2 ** count)[:, None] >> np.arange(count)) & 1)
+        simulated = np.abs((signs * effects).mean(axis=1))
+        p = float(np.mean(simulated >= abs(effects.mean()) - 1e-12))
+    else:
+        signs = rng.choice([-1, 1], size=(n, count))
+        simulated = np.abs((signs * effects).mean(axis=1))
+        p = float((1 + np.sum(simulated >= abs(effects.mean()) - 1e-12)) / (n + 1))
+    lo, hi = np.percentile(bootstrap, [2.5, 97.5])
+    return {"n_pairs": count, "mean_auc": float(aucs.mean()),
+            "auc_ci": [float(lo), float(hi)], "paired_p": p}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--iface", default="en0")
@@ -101,9 +131,11 @@ def main() -> int:
                     help="score an existing capture instead of recording")
     args = ap.parse_args()
 
-    if not CORE.exists():
-        subprocess.run(["swiftc", "-O", "-framework", "CoreWLAN", "-o", str(CORE),
-                        str(ROOT / "native" / "wifisense_core.swift")], check=True)
+    if args.block <= 0 or args.reps < 1 or args.lead < 0:
+        ap.error("block and reps must be positive; lead must be nonnegative")
+    if not args.analyse_only:
+        from common import build_core
+        build_core()
 
     # schedule: A(empty) B(occupied) alternating, starting empty
     blocks = []
@@ -138,9 +170,15 @@ def main() -> int:
                                  "--duration", str(int(total)), "--fine-hz", "20",
                                  "--quiet"])
         try:
-            proc.wait()
+            if proc.wait() != 0:
+                raise RuntimeError("capture failed")
         except KeyboardInterrupt:
             proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
 
     s = io.load(out)
     r = detect.detect(s, win_s=args.win, threshold=args.threshold)
@@ -163,6 +201,9 @@ def main() -> int:
         elif n == "EMPTY":
             neg.append(d.motion)
     pos, neg = np.array(pos), np.array(neg)
+    if len(pos) < 5 or len(neg) < 5:
+        print("not enough data for both conditions")
+        return 1
 
     # per-block medians show whether the effect is stable or driven by one window
     for i, (name, _d) in enumerate(blocks):
@@ -187,7 +228,7 @@ def main() -> int:
     for i, (name, _d) in enumerate(blocks):
         raw[i] = np.array([dd.motion for dd in r.detections
                            if marks[i + 1] <= dd.t < marks[i + 2]])
-    print("\nblocked by adjacent pair (cancels drift):")
+    print("\nblocked by adjacent pair (reduces slow drift):")
     diffs, pair_aucs = [], []
     for pr in range(args.reps):
         e_i, o_i = 2 * pr, 2 * pr + 1
@@ -210,23 +251,27 @@ def main() -> int:
     print("\npooled after removing each block's median:")
     dp, dn = [], []
     for i, (name, _d) in enumerate(blocks):
+        if not len(raw[i]):
+            continue
         v = raw[i] - np.median(raw[i])
         (dp if name == "OCCUPIED" else dn).append(v)
     dp, dn = np.concatenate(dp), np.concatenate(dn)
     a2 = auc(dp, dn)
-    lo2, hi2 = boot_ci(dp, dn)
-    print(f"  AUC {a2:.3f}   95% CI [{lo2:.3f}, {hi2:.3f}]")
+    print(f"  AUC {a2:.3f} (descriptive; removes location shifts as well as drift)")
 
     if len(pos) < 5 or len(neg) < 5:
         print("not enough data")
         return 1
 
     a = auc(pos, neg)
-    lo, hi = boot_ci(pos, neg)
-    p = perm_p(pos, neg)
+    paired = paired_summary([raw[2*i] for i in range(args.reps)],
+                            [raw[2*i+1] for i in range(args.reps)])
     print(f"\noccupied n={len(pos)}  empty n={len(neg)}")
-    print(f"  AUC           : {a:.3f}   95% CI [{lo:.3f}, {hi:.3f}]")
-    print(f"  permutation p : {p:.4f}")
+    print(f"  pooled AUC    : {a:.3f} (descriptive only)")
+    if paired:
+        print(f"  paired AUC    : {paired['mean_auc']:.3f}   "
+              f"95% CI {paired['auc_ci']} across {paired['n_pairs']} pairs")
+        print(f"  paired p      : {paired['paired_p']:.4f}")
     print(f"  median occ    : {np.median(pos):+.3f}")
     print(f"  median empty  : {np.median(neg):+.3f}")
     ov = max(0.0, min(pos.max(), neg.max()) - max(pos.min(), neg.min()))
@@ -235,17 +280,15 @@ def main() -> int:
           f"empty {neg.min():+.2f}..{neg.max():+.2f})")
 
     print()
-    if lo < 0.5:
-        verdict = "NO SIGNAL - AUC CI includes 0.5"
-    elif a < 0.7:
-        verdict = "UNUSABLE - distributions overlap too much to threshold"
-    elif a < 0.8:
-        verdict = "WEAK - only large excursions would separate"
+    if not paired:
+        verdict = "INSUFFICIENT REPLICATION - need at least two complete pairs"
+    elif paired["paired_p"] >= .05 or paired["auc_ci"][0] <= .5:
+        verdict = "NO RELIABLE EVIDENCE across independent pairs"
     else:
-        verdict = "USABLE - a threshold can separate the conditions"
+        verdict = "CANDIDATE SIGNAL - confirm with randomized block order"
     print(f"  verdict: {verdict}")
 
-    res = {"auc": a, "auc_ci": [lo, hi], "perm_p": p,
+    res = {"auc": a, "paired": paired, "centered_auc": a2,
            "n_occupied": len(pos), "n_empty": len(neg),
            "median_occupied": float(np.median(pos)),
            "median_empty": float(np.median(neg)),
