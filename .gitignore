@@ -10,5 +10,6 @@ probe/exp6
 probe/exp7
 
 __pycache__/
+.venv/
 *.pyc
 .DS_Store

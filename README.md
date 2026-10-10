@@ -54,8 +54,16 @@ same 5 sweeps — the limiter is global, not per-process.
 
 ## Quick start
 
+Use Python 3.10 or newer. Capturing WiFi requires macOS, CoreWLAN and the
+Xcode command line tools (`swiftc`). The live displays also require Tk support
+in your Python installation. Offline analysis and regression tests can run
+without the WiFi interface or a desktop session.
+
 ```bash
 cd wifi_wall_sensing
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
 
 # 1. What can this machine actually do? (re-measures, ~70 s)
 python3 wifisense.py doctor
@@ -76,6 +84,16 @@ python3 wifisense.py analyze out/capture_*.jsonl
 `wifisense_live.py` is a second, panel-style dashboard (scrolling traces +
 anchor bars) if you prefer traces to a radar.
 
+Run the regression checks with:
+
+```bash
+MPLBACKEND=Agg python3 -m unittest discover -s tests -v
+```
+
+If your shell exports `PYTHONPATH` from a different Python environment, unset
+it before running these commands. Mixing extension modules from different
+Python versions can prevent NumPy from importing.
+
 ---
 
 ## Why the threshold must be measured, not chosen
@@ -84,6 +102,18 @@ With 1 dB quantisation and slow drift, a threshold picked from theory is
 meaningless. `baseline` records the score distribution while the room is known
 to be empty and sets the threshold at `median + k·1.4826·MAD`. Without this
 step the detector will happily alarm on an empty room all afternoon.
+
+The baseline now saves its fine-channel center and scale, sweep anchor set,
+and sweep reference as well as its threshold. Analysis and live displays use
+those saved parameters rather than normalizing each measurement independently.
+Regenerate older `out/baseline.json` files with `baseline`; incompatible files
+are rejected. The analysis window must match the baseline window. An explicit
+live `--threshold` selects descriptive scoring without the saved calibration.
+
+Fine-channel windows use only past samples. Sweep evidence begins at the
+completed scan timestamp and expires using that scan's preceding interval.
+Missing or stale live samples produce `NO DATA` rather than a clear-room
+decision.
 
 ---
 
@@ -211,6 +241,15 @@ Reproduce: `python3 wifisense.py calibrate` then `validate-map`
 #---
 
 ## Result: occupancy is not detectable either, and the pooled figure lies
+
+The tables below record the original scoring pipeline. Current scores differ
+after the causal window and calibration fixes. The occupancy command now
+computes uncertainty across A/B pairs, rather than treating thousands of
+overlapping fine buckets as independent observations. Pooled and centered AUC
+remain descriptive statistics. A centered AUC also removes a genuine shift in
+occupancy level, so it cannot establish absence of an occupancy effect by
+itself. Fixed A/B order still needs randomized confirmation before attributing
+a repeatable difference to occupancy.
 
 Three A/B pairs of 90 s blocks, alternating empty and occupied, 9.3 min total.
 
@@ -383,12 +422,19 @@ python3 wifisense.py localize out/capture_xxx.jsonl
 python3 wifisense.py heatmap  out/capture_xxx.jsonl
 ```
 
-Distance is weighted L1 in dB (RSSI differences are heavy-tailed; one badly
-multipathed anchor must not dominate), and anchors whose RSSI fluctuates
-wildly between cells are down-weighted because they are dominated by fast
-multipath rather than by position. Until a map exists the radar prints
-`LOCALISATION OFFLINE` and shows measured anchor evidence only — it will not
-invent positions.
+Distance is mean absolute RSSI difference in dB across measured shared
+anchors. Spatial variation between cells is the localization signal, so it
+is no longer used as a proxy for temporal noise to down-weight anchors.
+Every candidate cell uses the same observed dimensions. A query needs at
+least five shared anchors covering at least half the map's anchor set;
+otherwise it returns no position. Missing readings are not copied between
+cells or replaced with a synthetic live fingerprint.
+
+The radar, `localize`, and `heatmap` require a map that passes `validate-map`.
+Coarsening a map or recording a new repeatability result invalidates its old
+verdict. Repeatability compares matched positions on the same measured anchor
+set in both surveys. Map matching prepares its matrix once for repeated
+queries, and separation checks reduce cell pairs in bounded memory.
 
 ---
 
