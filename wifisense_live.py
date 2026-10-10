@@ -37,7 +37,7 @@ from matplotlib.patches import FancyBboxPatch  # noqa: E402
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from sensing import features as F  # noqa: E402
+from sensing import detect, features as F  # noqa: E402
 from common import build_core  # noqa: E402
 
 OUT = ROOT / "out"
@@ -63,6 +63,9 @@ class State:
         self.fine_rssi: collections.deque = collections.deque(maxlen=40000)
         self.fine_mn: collections.deque = collections.deque(maxlen=40000)
         self.fine_mx: collections.deque = collections.deque(maxlen=40000)
+        self.fine_sd: collections.deque = collections.deque(maxlen=40000)
+        self.fine_chg: collections.deque = collections.deque(maxlen=40000)
+        self.calibration = None
         self.sweeps: list[tuple[float, dict]] = []
         self.ap_keys: list[str] = []
         self.lock = threading.Lock()
@@ -88,6 +91,8 @@ class State:
                 "rssi": np.array(self.fine_rssi),
                 "mn": np.array(self.fine_mn),
                 "mx": np.array(self.fine_mx),
+                "sd": np.array(self.fine_sd),
+                "chg": np.array(self.fine_chg),
                 "sweeps": [(x[0], dict(x[1])) for x in self.sweeps[-60:]],
                 "keys": list(self.ap_keys),
                 "meta": dict(self.meta),
@@ -126,6 +131,8 @@ def reader(path: Path, st: State, proc_holder: dict) -> None:
                 st.fine_rssi.append(o["rssi"])
                 st.fine_mn.append(o["min"])
                 st.fine_mx.append(o["max"])
+                st.fine_sd.append(o["sd"])
+                st.fine_chg.append(o["chg"])
             elif kind == "sweep":
                 aps = {f"{a['ch']}/{a['w']}": a["rssi"] for a in o["aps"]}
                 st.sweeps.append((o["t"], aps))
@@ -137,40 +144,37 @@ def reader(path: Path, st: State, proc_holder: dict) -> None:
                 st.meta.setdefault("raw_rate_hz", o.get("raw_rate_hz"))
 
 
-def scores(snap: dict, win_s: float) -> tuple[np.ndarray, np.ndarray]:
+def scores(snap: dict, win_s: float, calibration=None) -> tuple[np.ndarray, np.ndarray]:
     """Fused motion score over the captured series.
 
     Takes the snapshot dict rather than the live State so that the timestamps,
     RSSI arrays and sweep list are guaranteed to be mutually consistent.
     """
-    t = snap["t"]
-    if len(t) < 3:
-        return t, np.zeros(len(t))
-    r, mn, mx = snap["rssi"], snap["mn"], snap["mx"]
-    sw, keys = snap["sweeps"], snap["keys"]
-    dt = float(np.median(np.diff(t)))
-    chg = np.zeros_like(t)
-    chg[1:] = (np.diff(mn) != 0).astype(float) + (np.diff(mx) != 0).astype(float)
-    sd = (mx - mn).astype(float)
+    if calibration is not None:
+        detect.validate_calibration(calibration, win_s)
+    keys = (calibration["sweep_keys"] if calibration is not None else
+            sorted({k for _, aps in snap["sweeps"] for k in aps}))
+    counts = {k: sum(k in aps for _, aps in snap["sweeps"]) for k in keys}
+    if calibration is None:
+        keys = [k for k in keys if counts[k] >= max(1, len(snap["sweeps"]) // 3)]
+    sw = snap["sweeps"]
+    mat = np.array([[float(aps.get(k, np.nan)) for k in keys] for _, aps in sw])
+    result = detect.motion_score_arrays(
+        snap["t"], snap["rssi"], snap["sd"], snap["chg"],
+        np.array([t for t, _ in sw]), mat.reshape(len(sw), len(keys)),
+        win_s=win_s, calibration=calibration)
+    return result[0], result[1]
 
-    ff = F.fine_features(t, r, sd, chg, win_s, dt)
-    span = float(t[-1] - t[0]) if len(t) > 1 else 600.0
-    half_life = max(60.0, min(max(span * 0.6, 3 * win_s), 1800.0))
-    res = F.detrend(ff[:, 0], t, half_life_s=half_life)
-    fine = F.zscore_robust(F.envelope(res))
 
-    sweep = np.zeros(len(t))
-    if len(sw) >= 3 and keys:
-        st_ = np.array([x[0] for x in sw])
-        mat = np.array([[float(m.get(k, np.nan)) for k in keys] for _t, m in sw])
-        sf = F.sweep_features(st_, mat)
-        if len(sf):
-            l1z = F.ratio_score(sf[:, 0])
-            se = st_[1:]
-            interval = float(np.median(np.diff(st_)))
-            sweep = F.hold_sweeps(t, se, min(1.0, len(l1z) / 12.0) * l1z,
-                                  max(2.0 * interval, 10.0))
-    return t, np.maximum(fine, sweep)
+def configure_calibration(st, threshold):
+    """Use the full saved calibration unless an explicit threshold is given."""
+    path = OUT / "baseline.json"
+    if threshold is None and path.exists():
+        st.calibration = json.loads(path.read_text())
+        detect.validate_calibration(st.calibration, st.win_s)
+        st.threshold = st.calibration["threshold"]
+    else:
+        st.threshold = threshold if threshold is not None else 3.0
 
 
 class Dash:
@@ -251,7 +255,7 @@ class Dash:
         st = self.st
         snap = st.snapshot()
         st.meta = snap["meta"]
-        t, motion = scores(snap, st.win_s)
+        t, motion = scores(snap, st.win_s, st.calibration)
         occ = bool(len(motion) and motion[-1] >= st.threshold)
         self._header(float(motion[-1]) if len(motion) else 0.0, occ)
 
@@ -346,7 +350,7 @@ def main() -> int:
     ap.add_argument("--empty", type=int, default=45)
     ap.add_argument("--walk", type=int, default=45)
     ap.add_argument("--still", type=int, default=45)
-    ap.add_argument("--threshold", type=float, default=3.0)
+    ap.add_argument("--threshold", type=float, default=None)
     ap.add_argument("--win", type=float, default=10.0)
     args = ap.parse_args()
 
@@ -354,7 +358,10 @@ def main() -> int:
 
     st = State()
     st.win_s = args.win
-    st.threshold = args.threshold
+    try:
+        configure_calibration(st, args.threshold)
+    except ValueError as e:
+        ap.error(str(e))
 
     cap = OUT / ("live_walktest.jsonl" if args.mode == "walktest" else "live_monitor.jsonl")
     if cap.exists():

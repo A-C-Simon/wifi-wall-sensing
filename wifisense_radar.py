@@ -27,7 +27,7 @@ def main() -> int:
     ap.add_argument("--empty", type=int, default=40)
     ap.add_argument("--walk", type=int, default=60)
     ap.add_argument("--still", type=int, default=40)
-    ap.add_argument("--threshold", type=float, default=3.0)
+    ap.add_argument("--threshold", type=float, default=None)
     ap.add_argument("--win", type=float, default=10.0)
     ap.add_argument("--room-x", type=float, default=7.0)
     ap.add_argument("--room-y", type=float, default=6.0)

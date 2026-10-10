@@ -59,7 +59,8 @@ class DetectResult:
         return out
 
 
-def motion_score(session, win_s: float = 10.0, min_sweep_l1: float = 3.0):
+def motion_score(session, win_s: float = 10.0, min_sweep_l1: float = 3.0,
+                 calibration: dict | None = None):
     """Compute the fused motion score without thresholding.
 
     Split out from `detect` so an empty-room baseline can be characterised with
@@ -70,54 +71,89 @@ def motion_score(session, win_s: float = 10.0, min_sweep_l1: float = 3.0):
     fine_rate). sweep_l1 is the raw multi-AP change in dB, held constant between
     fresh sweeps, and is carried for diagnostics only.
     """
-    ft = np.array([f.t for f in session.fine])
-    if len(ft) == 0:
-        z = np.zeros(0)
-        return z, z, z, z, z, 0.0, 0.0  # t, motion, fine, sweep, l1, interval, rate
-    rssi = np.array([f.rssi for f in session.fine])
-    sd = np.array([f.sd for f in session.fine])
-    chg = np.array([f.chg for f in session.fine])
-    dt = float(np.median(np.diff(ft))) if len(ft) > 1 else 0.05
+    if calibration is not None:
+        validate_calibration(calibration, win_s)
+    keys = (calibration["sweep_keys"] if calibration is not None else
+            session.ap_keys(min_count=max(1, len(session.sweeps) // 3)))
+    return motion_score_arrays(
+        np.array([f.t for f in session.fine]),
+        np.array([f.rssi for f in session.fine]),
+        np.array([f.sd for f in session.fine]),
+        np.array([f.chg for f in session.fine]),
+        np.array([s.t for s in session.sweeps]),
+        np.array([s.vector(keys) for s in session.sweeps], dtype=float)
+        .reshape(len(session.sweeps), len(keys)),
+        win_s, min_sweep_l1, calibration)
 
+
+def _fine_energy(ft, rssi, sd, chg, win_s):
+    dt = float(np.median(np.diff(ft))) if len(ft) > 1 else 0.05
     ff = F.fine_features(ft, rssi, sd, chg, win_s, dt)
-    # Detrend half-life must cover the whole recording. With a short half-life
-    # the baseline follows the motion itself and cancels the signal; with too
-    # long a one, AGC drift accumulates faster than the body perturbs the link
-    # and the score ends up tracking drift (observed: an empty phase scoring
-    # higher than the walk phase). Tie it to the capture length.
-    span = float(ft[-1] - ft[0]) if len(ft) > 1 else 600.0
-    half_life = max(60.0, min(max(span * 0.6, 3 * win_s), 1800.0))
-    fine_res = F.detrend(ff[:, 0], ft, half_life_s=half_life)
-    fine_score = F.zscore_robust(F.envelope(fine_res))
+    # Fixed across baseline and measurement; capture length is not a physical
+    # filter parameter and must not change historical scores as data arrives.
+    residual = F.detrend(ff[:, 0], ft, half_life_s=max(120.0, 3 * win_s))
+    return F.envelope(residual), ff
+
+
+def validate_calibration(calibration, win_s):
+    if calibration.get("score_version") != 2:
+        raise ValueError("baseline uses an old score pipeline; record a new baseline")
+    if calibration.get("win_s") != win_s:
+        raise ValueError("baseline window differs from analysis window; record a matching baseline")
+    for name in ("fine_center", "fine_scale", "sweep_reference", "threshold"):
+        if not np.isfinite(calibration.get(name, np.nan)):
+            raise ValueError(f"invalid baseline {name}")
+    if calibration["fine_scale"] <= 0 or calibration["sweep_reference"] <= 0:
+        raise ValueError("baseline scales must be positive")
+    if not isinstance(calibration.get("sweep_keys"), list):
+        raise ValueError("baseline must include its sweep anchor set")
+
+
+def motion_score_arrays(ft, rssi, sd, chg, st, mat, win_s=10.0,
+                        min_sweep_l1=3.0, calibration=None):
+    """Shared scoring implementation for recorded and live samples.
+
+    A supplied empty-room calibration fixes normalization independently of
+    the target recording. Uncalibrated scores are descriptive only.
+    """
+    if calibration is not None:
+        validate_calibration(calibration, win_s)
+    if not len(ft):
+        z = np.zeros(0)
+        return z, z, z, z, z, 0.0, 0.0
+    energy, ff = _fine_energy(ft, rssi, sd, chg, win_s)
+    if calibration is None:
+        fine_score = F.zscore_robust(energy)
+    else:
+        fine_score = (energy - calibration["fine_center"]) / calibration["fine_scale"]
 
     sweep_score = np.zeros(len(ft))
     sweep_l1 = np.zeros(len(ft))
-    st = np.array([s.t for s in session.sweeps])
     interval = float(np.median(np.diff(st))) if len(st) > 1 else 0.0
-    n_sweeps = len(session.sweeps)
+    n_sweeps = len(st)
     if n_sweeps >= 2:
-        keys = session.ap_keys(min_count=max(1, n_sweeps // 3))
-        if keys:
-            mat = np.array([s.vector(keys) for s in session.sweeps], dtype=float)
+        if mat.shape[1]:
             sf = F.sweep_features(st, mat)
             if len(sf):
                 l1 = sf[:, 0]
-                l1z = F.ratio_score(l1)
+                if calibration is None:
+                    l1z = F.ratio_score(l1)
+                else:
+                    l1z = (l1 / calibration["sweep_reference"] - 1.0) * 3.0
+                l1z = np.where(l1 >= min_sweep_l1, l1z, 0.0)
                 se = st[1:]
                 # The sweep statistic is a z-score over only n_intervals
                 # samples and is then held constant for ~12 s. With too little
                 # history it is statistically meaningless yet would dominate
                 # hundreds of fine buckets, so fade it in as evidence accrues.
-                w = min(1.0, len(l1z) / 12.0)
+                w = np.minimum(1.0, np.arange(1, len(l1z) + 1) / 12.0)
                 max_age = max(2.0 * interval, 10.0)
                 sweep_score = F.hold_sweeps(ft, se, w * l1z, max_age)
                 sweep_l1 = F.hold_sweeps(ft, se, l1, max_age)
 
     motion = np.maximum(fine_score, sweep_score)
-    # Both terms are robust z-scores, so they are directly comparable and the
-    # max is a valid "either channel saw it" rule. Note sweep_score is left at
-    # 0 (the median of its own distribution) where no fresh sweep is due, which
-    # makes it neutral rather than falsely reassuring.
+    # The threshold is measured on this fused statistic. Sweep ratio scores
+    # and fine MAD scores are different units, so neither is a probability.
     return (ft, motion, fine_score, sweep_score, sweep_l1, interval,
             float(np.mean(ff[:, 2])))
 
@@ -131,12 +167,29 @@ def baseline_threshold(session, win_s: float = 10.0, k: float = 6.0,
     unoccupied, then inflated by `k` robust sigmas to bound the false-alarm
     rate. Returns the distribution so the calibration can be audited.
     """
-    ft, motion, fine, sweep, _l1, interval, frate = motion_score(
-        session, win_s, min_sweep_l1)
-    if len(motion) == 0:
+    if not session.fine:
         return {}
+    ft = np.array([f.t for f in session.fine])
+    energy, _ = _fine_energy(ft, np.array([f.rssi for f in session.fine]),
+                              np.array([f.sd for f in session.fine]),
+                              np.array([f.chg for f in session.fine]), win_s)
+    center = float(np.median(energy))
+    scale = float(np.median(np.abs(energy - center)))
+    if scale <= 1e-9:
+        scale = float(np.std(energy))
+    scale = max(scale, 0.1)  # finite floor for a perfectly quiet baseline
+    keys = session.ap_keys(min_count=max(1, len(session.sweeps) // 3))
+    mat = np.array([sw.vector(keys) for sw in session.sweeps], dtype=float)
+    sf = F.sweep_features(np.array([sw.t for sw in session.sweeps]), mat)
+    reference = max(min_sweep_l1, float(np.median(sf[:, 0])) if len(sf) else 0., 1e-9)
+    params = {"score_version": 2, "win_s": win_s, "fine_center": center,
+              "fine_scale": scale, "sweep_reference": reference,
+              "sweep_keys": keys, "threshold": 0.0}
+    ft, motion, fine, sweep, _l1, interval, frate = motion_score(
+        session, win_s, min_sweep_l1, params)
     thr = F.auto_threshold(motion, k=k)
     return {
+        **params,
         "n_samples": int(len(motion)),
         "duration_s": float(ft[-1] - ft[0]) if len(ft) > 1 else 0.0,
         "threshold": float(thr),
@@ -152,7 +205,8 @@ def baseline_threshold(session, win_s: float = 10.0, k: float = 6.0,
 
 
 def detect(session, win_s: float = 10.0, k: float = 6.0,
-           min_sweep_l1: float = 3.0, threshold: float | None = None) -> DetectResult:
+           min_sweep_l1: float = 3.0, threshold: float | None = None,
+           calibration: dict | None = None) -> DetectResult:
     """Combine both channels into one motion decision per fine bucket.
 
     win_s should be several times the ~0.2 Hz information rate of the RSSI
@@ -162,13 +216,14 @@ def detect(session, win_s: float = 10.0, k: float = 6.0,
     """
     res = DetectResult()
     ft, motion, fine_score, sweep_score, sweep_l1, interval, frate = motion_score(
-        session, win_s, min_sweep_l1)
+        session, win_s, min_sweep_l1, calibration)
     res.fine_rate_hz = frate
     res.sweep_interval_s = interval
     if len(ft) == 0:
         return res
 
-    thr = threshold if threshold is not None else F.auto_threshold(motion, k=k)
+    thr = (threshold if threshold is not None else calibration["threshold"]
+           if calibration is not None else F.auto_threshold(motion, k=k))
     res.threshold = float(thr)
 
     for i in range(len(ft)):

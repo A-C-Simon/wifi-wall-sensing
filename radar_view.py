@@ -25,7 +25,7 @@ from matplotlib.patches import FancyBboxPatch, Rectangle
 
 from common import CORE, OUT, ROOT
 from sensing import features as F, linkmodel, radiomap
-from wifisense_live import State, reader, scores
+from wifisense_live import State, configure_calibration, reader, scores
 
 
 BG = "#0b0e14"
@@ -63,7 +63,7 @@ class Radar:
         self.a = args
         self.st = State()
         self.st.win_s = args.win
-        self.st.threshold = args.threshold
+        configure_calibration(self.st, args.threshold)
         self.blips = Blips()
         self.rmap = None
         self.laptop = (args.laptop_x, args.laptop_y)
@@ -175,7 +175,7 @@ class Radar:
         snap = st.snapshot()
         st.meta = snap["meta"]
         now = st.elapsed()
-        t, motion = scores(snap, st.win_s)
+        t, motion = scores(snap, st.win_s, st.calibration)
         cur = float(motion[-1]) if len(motion) else 0.0
         occ = bool(cur >= st.threshold)
 

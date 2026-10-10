@@ -127,12 +127,15 @@ def cmd_capture(args) -> int:
 
 def cmd_baseline(args) -> int:
     src = Path(args.capture) if args.capture else OUT / f"baseline_{int(time.time())}.jsonl"
+    if args.capture and not src.exists():
+        print(f"no baseline capture at {src}")
+        return 1
     if not src.exists():
         print("recording empty-room baseline ...", flush=True)
         print("LEAVE THE ROOM EMPTY for the whole recording.", flush=True)
         build_core()
         subprocess.run([str(CORE), "--iface", args.iface, "--out", str(src),
-                        "--duration", str(args.duration), "--fine-hz", "20"])
+                        "--duration", str(args.duration), "--fine-hz", "20"], check=True)
     s = io.load(src)
     info = detect.baseline_threshold(s, win_s=args.win, k=args.k)
     if not info:
@@ -140,7 +143,8 @@ def cmd_baseline(args) -> int:
     info["capture"] = str(src)
     (OUT / "baseline.json").write_text(json.dumps(info, indent=1))
     print(json.dumps(info, indent=1))
-    viz.plot_channels(s, str(OUT / "baseline.png"), detect.detect(s, threshold=info["threshold"]))
+    viz.plot_channels(s, str(OUT / "baseline.png"),
+                      detect.detect(s, win_s=args.win, calibration=info))
     print(f"\nwrote {OUT/'baseline.json'} and {OUT/'baseline.png'}")
     return 0
 
@@ -151,12 +155,17 @@ def cmd_baseline(args) -> int:
 def cmd_analyze(args) -> int:
     src = Path(args.capture)
     s = io.load(src)
-    thr = None
+    calibration = None
     bp = OUT / "baseline.json"
     if bp.exists() and not args.no_baseline:
-        thr = json.loads(bp.read_text()).get("threshold")
-        print(f"using calibrated threshold {thr:.3f} from {bp}")
-    r = detect.detect(s, win_s=args.win, threshold=thr)
+        calibration = json.loads(bp.read_text())
+        try:
+            detect.validate_calibration(calibration, args.win)
+        except ValueError as e:
+            print(str(e))
+            return 1
+        print(f"using calibrated threshold {calibration['threshold']:.3f} from {bp}")
+    r = detect.detect(s, win_s=args.win, calibration=calibration)
     segs = r.segments()
     print(f"\nfine buckets : {len(s.fine)}  ({r.fine_rate_hz:.2f} transitions/s)")
     print(f"sweeps       : {len(s.sweeps)}  (interval {r.sweep_interval_s:.1f}s)")
