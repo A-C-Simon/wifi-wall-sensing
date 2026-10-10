@@ -228,8 +228,7 @@ def cmd_validate_map(args) -> int:
     # cells would manufacture separation from readings measured elsewhere.
     keys = [k for k, valid in zip(rm.keys, shared) if valid]
     M = matrix[:, shared]
-    D = np.abs(M[:, None, :] - M[None, :, :]).sum(axis=2)
-    np.fill_diagonal(D, np.inf)
+    closest, mean_between = radiomap.pairwise_summary(M)
 
     # within-cell temporal noise, measured from the survey captures if present
     noise = []
@@ -250,13 +249,11 @@ def cmd_validate_map(args) -> int:
             noise.append(float(np.median(d)))
     wn = float(np.median(noise)) if noise else float(args.default_noise)
 
-    closest = float(D.min())
     if not np.isfinite(wn) or wn < 0:
         raise ValueError("within-cell noise must be finite and nonnegative")
     # Identical, perfectly quiet cells have zero separation, not infinite
     # separability. A small floor also keeps saved JSON finite.
     sep_ratio = closest / max(wn, 1e-9)
-    mean_between = float(D[np.isfinite(D)].mean())
 
     print(f"map: {n} regions x {len(rm.keys)} anchors")
     print(f"  within-cell temporal noise : {wn:.1f} dB")

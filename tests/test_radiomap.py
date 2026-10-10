@@ -1,6 +1,7 @@
 import unittest
+import numpy as np
 
-from sensing.radiomap import Fingerprint, Matcher, RadioMap, localize
+from sensing.radiomap import Fingerprint, Matcher, RadioMap, localize, pairwise_summary
 
 
 def point(label, values):
@@ -32,3 +33,18 @@ class LocalizationTests(unittest.TestCase):
         for rm in (self.rm, reverse):
             self.assertEqual([(p.label, d) for p, d in localize(rm, self.a)],
                              [("a", 0), ("b", 20)])
+
+
+class PairwiseTests(unittest.TestCase):
+    def test_summary_matches_exhaustive_pairs(self):
+        mat = np.random.default_rng(42).normal(size=(270, 8))
+        expected = np.abs(mat[:, None, :] - mat[None, :, :]).sum(axis=2)
+        distances = expected[np.triu_indices(len(mat), 1)]
+        closest, mean = pairwise_summary(mat)
+        self.assertAlmostEqual(closest, distances.min())
+        self.assertAlmostEqual(mean, distances.mean())
+
+    def test_degenerate_matrix_is_rejected(self):
+        for mat in (np.zeros((1, 5)), np.zeros((2, 0)), np.full((2, 5), np.nan)):
+            with self.assertRaises(ValueError):
+                pairwise_summary(mat)

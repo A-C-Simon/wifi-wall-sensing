@@ -110,6 +110,24 @@ def distance(a: np.ndarray, b: np.ndarray, w: np.ndarray | None = None) -> float
     return float((d * w).sum() / max(w.sum(), 1e-9))
 
 
+def pairwise_summary(mat: np.ndarray) -> tuple[float, float]:
+    """Closest and mean L1 separation with bounded temporary memory.
+
+    Reduce unordered pairs in blocks rather than allocating a cells by cells
+    by anchors tensor. Each pair is evaluated once.
+    """
+    if mat.ndim != 2 or len(mat) < 2 or not mat.shape[1] or not np.all(np.isfinite(mat)):
+        raise ValueError("pairwise separation needs two finite, nonempty fingerprints")
+    closest, total, count = float("inf"), 0.0, 0
+    for i in range(len(mat) - 1):
+        for j in range(i + 1, len(mat), 256):
+            ds = np.abs(mat[j:j + 256] - mat[i]).sum(axis=1)
+            closest = min(closest, float(ds.min()))
+            total += float(ds.sum())
+            count += len(ds)
+    return closest, total / count
+
+
 def anchor_weights(mat: np.ndarray) -> np.ndarray:
     """Down-weight anchors whose RSSI fluctuates wildly between survey cells.
 
