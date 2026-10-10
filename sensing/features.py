@@ -43,7 +43,7 @@ def _sliding(a: np.ndarray, w: int, fn) -> np.ndarray:
 
 def fine_features(t: np.ndarray, rssi: np.ndarray, sd: np.ndarray,
                   chg: np.ndarray, win_s: float, dt: float) -> np.ndarray:
-    """Per-sample aggregates over a `win_s` window of the fine channel.
+    """Causal aggregates over the preceding `win_s` seconds.
 
     Returns an (N, 3) array of [mean rssi, mean within-bucket sd,
     transitions per second]. The window mean is retained because slow AGC drift
@@ -52,12 +52,27 @@ def fine_features(t: np.ndarray, rssi: np.ndarray, sd: np.ndarray,
     n = len(t)
     if n == 0:
         return np.zeros((0, 3))
-    win = max(1, int(round(win_s / max(dt, 1e-6))))
+    if not np.isfinite(win_s) or win_s <= 0:
+        raise ValueError("win_s must be finite and positive")
+    if not np.all(np.isfinite(t)) or np.any(np.diff(t) <= 0):
+        raise ValueError("fine timestamps must be finite and strictly increasing")
+    if any(len(a) != n for a in (rssi, sd, chg)):
+        raise ValueError("fine arrays must have matching lengths")
+    # Prefix sums avoid reducing an overlapping window for every sample.
+    # Actual timestamps keep a delayed bucket from stretching the window.
+    left = np.searchsorted(t, t - win_s, side="right")
+    right = np.arange(1, n + 1)
+    counts = right - left
     out = np.zeros((n, 3))
-    out[:, 0] = _sliding(rssi, win, np.mean)
-    out[:, 1] = _sliding(sd, win, np.mean)
-    win_chg = _sliding(chg, win, np.sum)
-    out[:, 2] = win_chg / max(win_s, 1e-6)
+    for j, values in enumerate((rssi, sd, chg)):
+        cs = np.r_[0.0, np.cumsum(values, dtype=float)]
+        out[:, j] = cs[right] - cs[left]
+    out[:, :2] /= counts[:, None]
+    # A startup window contains less than win_s seconds of observations.
+    bucket_dt = max(float(dt), 1e-6)
+    starts = np.r_[t[0] - bucket_dt, t[:-1]]
+    elapsed = np.maximum(np.minimum(win_s, t - starts[left]), 1e-6)
+    out[:, 2] /= elapsed
     return out
 
 
@@ -71,16 +86,14 @@ def detrend(x: np.ndarray, t: np.ndarray, half_life_s: float = 120.0) -> np.ndar
     """
     if x.size == 0:
         return x
-    if len(t) > 1:
-        dt = float(np.median(np.diff(t)))
-    else:
-        dt = 0.05
-    dt = max(dt, 1e-3)
-    alpha = 1.0 - math.exp(-math.log(2.0) * dt / max(half_life_s, 1e-6))
+    steps = np.r_[0.0, np.diff(t)]
+    if len(t) != x.size or np.any(steps < 0):
+        raise ValueError("detrend requires matching, increasing timestamps")
+    alpha = -np.expm1(-math.log(2.0) * steps / max(half_life_s, 1e-6))
     out = np.empty_like(x, dtype=float)
     base = float(x[0])
     for i in range(x.size):
-        base += alpha * (float(x[i]) - base)
+        base += alpha[i] * (float(x[i]) - base)
         out[i] = float(x[i]) - base
     return out
 
