@@ -47,3 +47,17 @@ class CalibrationTests(unittest.TestCase):
             actual = scores(snap, 10, calibration)[1]
             expected = detect.motion_score(s, calibration=calibration)[1]
             np.testing.assert_allclose(actual, expected)
+
+    def test_later_scan_cadence_cannot_rewrite_calibrated_history(self):
+        baseline = session(np.full(2000, -60))
+        baseline.sweeps = [io.Sweep(t, 0, {"a": -60 + i})
+                           for i, t in enumerate((0, 5, 10))]
+        calibration = detect.baseline_threshold(baseline)
+        target = session(np.full(2000, -60))
+        target.sweeps = [io.Sweep(t, 0, {"a": -60 + 10 * i})
+                         for i, t in enumerate((0, 5, 10))]
+        prefix = detect.motion_score(target, calibration=calibration)
+        target.sweeps += [io.Sweep(t, 0, {"a": -30}) for t in (100, 200, 300)]
+        full = detect.motion_score(target, calibration=calibration)
+        for actual, expected in zip(full[:5], prefix[:5]):
+            np.testing.assert_allclose(actual, expected)

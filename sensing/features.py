@@ -179,7 +179,7 @@ def sweep_features(sweep_t: np.ndarray, matrix: np.ndarray) -> np.ndarray:
 
 
 def hold_sweeps(t: np.ndarray, sweep_t: np.ndarray, values: np.ndarray,
-                max_age: float) -> np.ndarray:
+                max_age: float | np.ndarray) -> np.ndarray:
     """Hold each sweep statistic from its timestamp until it expires.
 
     Before the first completed interval there is no evidence. At an exact
@@ -190,7 +190,9 @@ def hold_sweeps(t: np.ndarray, sweep_t: np.ndarray, values: np.ndarray,
         return out
     idx = np.searchsorted(sweep_t, t, side="right") - 1
     safe = np.maximum(idx, 0)
-    valid = (idx >= 0) & (t - sweep_t[safe] < max_age)
+    ages = np.asarray(max_age)
+    expiry = ages[safe] if ages.ndim else ages
+    valid = (idx >= 0) & (t - sweep_t[safe] < expiry)
     out[valid] = values[safe[valid]]
     return out
 

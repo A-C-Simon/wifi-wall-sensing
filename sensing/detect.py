@@ -147,7 +147,10 @@ def motion_score_arrays(ft, rssi, sd, chg, st, mat, win_s=10.0,
                 # history it is statistically meaningless yet would dominate
                 # hundreds of fine buckets, so fade it in as evidence accrues.
                 w = np.minimum(1.0, np.arange(1, len(l1z) + 1) / 12.0)
-                max_age = max(2.0 * interval, 10.0)
+                # Each expiry uses only the interval that just completed.
+                # A later scan must not change whether earlier evidence was
+                # stale, even if later scans have a different cadence.
+                max_age = np.maximum(2.0 * np.diff(st), 10.0)
                 sweep_score = F.hold_sweeps(ft, se, w * l1z, max_age)
                 sweep_l1 = F.hold_sweeps(ft, se, l1, max_age)
 
