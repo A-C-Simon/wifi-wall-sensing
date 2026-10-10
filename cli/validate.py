@@ -28,50 +28,47 @@ def cmd_repeat_test(args) -> int:
     B = radiomap.RadioMap.load(args.b)
     tol = args.tol
 
-    def find(rm, x, y):
-        for p in rm.points:
-            if abs(p.x - x) <= tol and abs(p.y - y) <= tol:
-                return p
-        return None
-
-    same, diff, details = [], [], []
-    matched = []
-    for pa in A.points:
-        pb = find(B, pa.x, pa.y)
-        if not pb:
-            continue
-        keys = [k for k in pa.rssi if k in pb.rssi]
-        if len(keys) < 5:
-            continue
-        d = sum(abs(pa.rssi[k] - pb.rssi[k]) for k in keys)
-        same.append(d)
-        matched.append((pa.label, pb.label, d, len(keys)))
-        details.append(f"    {pa.label:>7} re-measured as {d:5.1f} dB over "
-                       f"{len(keys):2d} anchors ({d/len(keys):.2f} dB/anchor)")
-
-    # The two surveys rarely see the same anchor set (APs come and go), so both
-    # maps must be projected onto the common keys before they can be compared.
-    common = sorted(set(A.keys) & set(B.keys))
-    if len(common) < 5:
-        print(f"only {len(common)} anchors common to both surveys - cannot compare")
+    if Path(args.a).resolve() == Path(args.b).resolve():
+        print("repeatability needs two different surveys")
         return 1
-    print(f"\ncomparing over {len(common)} anchors common to both surveys "
+    if not np.isfinite(tol) or tol < 0:
+        raise ValueError("matching tolerance must be finite and nonnegative")
+
+    # Compare the same positions and exactly the same measured anchors in both
+    # statistics. Unmatched distant cells must not inflate the spatial signal.
+    pairs = []
+    used = set()
+    for pa in A.points:
+        candidates = [(i, pb) for i, pb in enumerate(B.points)
+                      if abs(pb.x - pa.x) <= tol and abs(pb.y - pa.y) <= tol]
+        if len(candidates) == 1 and candidates[0][0] not in used:
+            i, pb = candidates[0]
+            pairs.append((pa, pb))
+            used.add(i)
+    if len(pairs) < 2:
+        print("need at least two uniquely matching positions across surveys")
+        return 1
+
+    common = sorted(k for k in set(A.keys) & set(B.keys)
+                    if all(np.isfinite(p.rssi.get(k, np.nan))
+                           for pair in pairs for p in pair))
+    required = max(5, int(np.ceil(max(len(A.keys), len(B.keys)) / 2)))
+    if len(common) < required:
+        print(f"only {len(common)} measured anchors shared across matched positions; "
+              f"need {required}")
+        return 1
+    print(f"\ncomparing {len(pairs)} matched positions over {len(common)} anchors "
           f"(A had {len(A.keys)}, B had {len(B.keys)})")
+    ma = np.array([[pa.rssi[k] for k in common] for pa, _ in pairs])
+    mb = np.array([[pb.rssi[k] for k in common] for _, pb in pairs])
+    same = np.abs(ma - mb).sum(axis=1).tolist()
+    details = [f"    {pa.label:>7} re-measured as {d:5.1f} dB over "
+               f"{len(common):2d} anchors ({d/len(common):.2f} dB/anchor)"
+               for (pa, _), d in zip(pairs, same)]
 
-    def sub_matrix(rm):
-        idx = [rm.keys.index(k) for k in common]
-        return _fill_columns(rm.matrix()[:, idx])
-
-    ma, mb = sub_matrix(A), sub_matrix(B)
-
-    # Spatial spread must be measured WITHIN each survey, not across the two.
-    # Comparing A[i] against B[j] for i != j mixes position with the
-    # difference in which anchors each survey happened to hear, which inflates
-    # the apparent spatial signal and can invert the verdict.
     def within_spread(m):
-        v = [float(np.abs(m[i] - m[j]).sum())
-             for i in range(len(m)) for j in range(i + 1, len(m))]
-        return v
+        return [float(np.abs(m[i] - m[j]).sum())
+                for i in range(len(m)) for j in range(i + 1, len(m))]
 
     diff = within_spread(ma) + within_spread(mb)
 
@@ -99,6 +96,7 @@ def cmd_repeat_test(args) -> int:
         "mean_same_position_db": ms,
         "mean_different_position_db": md,
         "n_positions": len(same),
+        "anchor_keys": common,
     }
     B.meta.pop("verdict", None)
     B.save(args.b)
