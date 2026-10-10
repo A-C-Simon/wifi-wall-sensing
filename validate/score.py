@@ -17,30 +17,34 @@ OUT = ROOT / "out"
 
 
 def score_file(cap, threshold: float, win: float, e1: float, w: float,
-               s: float, e2: float) -> dict:
+               s: float, e2: float, lead: float = 0.0,
+               calibration: dict | None = None) -> dict:
     path = Path(cap)
     s_obj = io.load(path)
-    r = detect.detect(s_obj, win_s=win, threshold=threshold)
+    r = detect.detect(s_obj, win_s=win, threshold=threshold, calibration=calibration)
     if not r.detections:
         print("no data to score")
         return {}
 
-    marks = [0.0, e1, e1 + w, e1 + w + s, e1 + w + s + e2]
-    names = ["EMPTY", "WALK", "STILL", "EMPTY"]
+    threshold = r.threshold
+    marks = [lead, lead + e1, lead + e1 + w, lead + e1 + w + s,
+             lead + e1 + w + s + e2]
     # Distinct keys per phase: "EMPTY" occurs twice, and a dict keyed by name
     # would silently merge the two empty phases into one list.
     keys = ["E1", "WALK", "STILL", "E2"]
     label = {"E1": "EMPTY-1", "WALK": "WALK", "STILL": "STILL", "E2": "EMPTY-2"}
 
-    def phase_of(t: float) -> str:
+    def phase_of(t: float) -> str | None:
         for i in range(4):
             if marks[i] <= t < marks[i + 1]:
                 return keys[i]
-        return keys[-1]
+        return None
 
     by = {k: [] for k in keys}
     for d in r.detections:
-        by[phase_of(d.t)].append(d.motion)
+        phase = phase_of(d.t)
+        if phase is not None:
+            by[phase].append(d.motion)
 
     print(f"{'phase':<9}{'n':>6}{'median':>9}{'p95':>9}{'max':>9}{'alarm%':>9}")
     print("-" * 51)

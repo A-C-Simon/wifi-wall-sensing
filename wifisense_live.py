@@ -72,7 +72,8 @@ class State:
         self.stop = False
         self.meta: dict = {}
         self.error: str | None = None
-        self.start = time.time()
+        self.start = time.monotonic()
+        self.ready = threading.Event()
         self.win_s = 10.0
         self.threshold = 3.0
         self.phase: str = ""
@@ -99,7 +100,7 @@ class State:
             }
 
     def elapsed(self) -> float:
-        return time.time() - self.start
+        return time.monotonic() - self.start
 
 
 def reader(path: Path, st: State, proc_holder: dict) -> None:
@@ -126,6 +127,9 @@ def reader(path: Path, st: State, proc_holder: dict) -> None:
         with st.lock:
             if kind == "meta":
                 st.meta = o
+                if "started_at" in o:
+                    st.start = time.monotonic() - (time.time() - o["started_at"])
+                st.ready.set()
             elif kind == "fine":
                 st.fine_t.append(o["t"])
                 st.fine_rssi.append(o["rssi"])
@@ -382,8 +386,11 @@ def main() -> int:
     proc = subprocess.Popen([str(CORE), "--iface", args.iface, "--out", str(cap),
                              "--duration", str(dur), "--fine-hz", "20", "--quiet"])
     threading.Thread(target=reader, args=(cap, st, {}), daemon=True).start()
-    time.sleep(0.4)
-    st.start = time.time()
+    if not st.ready.wait(timeout=10):
+        st.stop = True
+        proc.terminate()
+        proc.wait(timeout=5)
+        raise RuntimeError("capture did not publish metadata")
     print(f"capturing -> {cap}   (threshold {st.threshold})")
     if args.mode == "walktest":
         print("Follow the on-screen prompts exactly. Press Ctrl-C in this "
@@ -395,7 +402,7 @@ def main() -> int:
         for dur_i, label in phases:
             t += dur_i
             st.phase, st.phase_total, st.phase_left = label, dur_i, dur_i
-            end = st.elapsed() + dur_i
+            end = t
             while st.elapsed() < end and proc.poll() is None:
                 st.phase_left = end - st.elapsed()
                 time.sleep(0.1)
@@ -417,13 +424,14 @@ def main() -> int:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+            proc.wait()
         print(f"\ncapture saved: {cap}")
 
     # Score the scripted phases for the record.
     if args.mode == "walktest":
         from validate.score import score_file
-        score_file(cap, args.threshold, args.win, args.empty, args.walk,
-                   args.still, args.empty)
+        score_file(cap, st.threshold, args.win, args.empty, args.walk,
+                   args.still, args.empty, calibration=st.calibration)
     return 0
 
 

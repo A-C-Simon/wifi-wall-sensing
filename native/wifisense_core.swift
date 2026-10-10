@@ -154,6 +154,7 @@ guard let w = JSONLWriter(path: opts.out) else {
 }
 
 let t0 = mono()
+let startedAt = Date().timeIntervalSince1970
 
 // ------------------------------------------------------------------ shutdown
 
@@ -205,6 +206,7 @@ func hardwareVersion() -> String {
 w.emit([
     "type": "meta",
     "t": 0.0,
+    "started_at": startedAt,
     "iface": opts.iface,
     "rssi_dbm": iface.rssiValue(),
     "noise_dbm": iface.noiseMeasurement(),

@@ -65,17 +65,21 @@ def main() -> int:
     proc = subprocess.Popen([str(CORE), "--iface", args.iface, "--out", str(cap),
                              "--duration", str(dur), "--fine-hz", "20", "--quiet"])
     threading.Thread(target=reader, args=(cap, r.st, {}), daemon=True).start()
-    time.sleep(0.4)
-    r.st.start = time.time()
+    if not r.st.ready.wait(timeout=10):
+        r.st.stop = True
+        proc.terminate()
+        proc.wait(timeout=5)
+        raise RuntimeError("capture did not publish metadata")
     print(f"radar capture -> {cap}")
     if not r.rmap or not r.rmap.points:
         print("NOTE: no radio map yet, so the radar will show anchor evidence "
               "only. Build one with:  python3 wifisense.py calibrate")
 
     def sched():
+        end = 0.0
         for dur_i, label in phases:
             r.st.phase, r.st.phase_total = label, dur_i
-            end = r.st.elapsed() + dur_i
+            end += dur_i
             while r.st.elapsed() < end and proc.poll() is None:
                 r.st.phase_left = end - r.st.elapsed()
                 time.sleep(0.1)
@@ -96,7 +100,13 @@ def main() -> int:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+            proc.wait()
         print(f"capture saved: {cap}")
+    if args.mode == "walktest":
+        from validate.score import score_file
+        score_file(cap, r.st.threshold, args.win, args.empty, args.walk,
+                   args.still, args.empty, lead=args.lead,
+                   calibration=r.st.calibration)
     return 0
 
 

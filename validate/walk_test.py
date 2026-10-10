@@ -53,113 +53,69 @@ def main() -> int:
     ap.add_argument("--out", default=str(OUT / "walktest.jsonl"))
     args = ap.parse_args()
 
-    if not CORE.exists():
-        subprocess.run(["swiftc", "-O", "-framework", "CoreWLAN", "-o", str(CORE),
-                        str(ROOT / "native" / "wifisense_core.swift")], check=True)
+    from common import build_core
+    build_core()
 
     out = Path(args.out)
     total = args.empty + args.walk + args.still + args.empty2
     bp = OUT / "baseline.json"
     thr = args.threshold
+    calibration = None
     if thr is None and bp.exists():
-        thr = json.loads(bp.read_text()).get("threshold")
+        calibration = json.loads(bp.read_text())
+        detect.validate_calibration(calibration, 10.0)
+        thr = calibration["threshold"]
     print(f"total {total}s, threshold = "
           f"{'calibrated ' + format(thr, '.3f') if thr else 'AUTO (no baseline found)'}")
 
+    if out.exists():
+        out.unlink()
     proc = subprocess.Popen([str(CORE), "--iface", args.iface, "--out", str(out),
                              "--duration", str(total), "--fine-hz", "20", "--quiet"])
 
-    # Phase schedule in capture-relative seconds.
-    marks = [0.0, float(args.empty), float(args.empty + args.walk),
-             float(args.empty + args.walk + args.still), float(total)]
-    names = ["EMPTY", "WALK", "STILL", "EMPTY"]
-
-    time.sleep(1.0)
-    for i in range(1, 4):
-        if i == 1:
-            countdown(args.empty, "PHASE 1 / WALK: walk through the area between "
-                                  "the access point and the laptop, back and forth.")
-        elif i == 2:
-            countdown(args.walk, "PHASE 2 / STILL: stand still in the middle of "
-                                 "the area, do not move.")
+    # Read the native capture epoch before prompting. All deadlines refer to
+    # that epoch, so subprocess startup and countdown overhead cannot shift
+    # labels by an entire phase.
+    from validate.score import score_file
+    started = time.monotonic()
+    try:
+        deadline = started + 10
+        while time.monotonic() < deadline:
+            if out.exists():
+                meta = io.load(out).meta
+                if "started_at" in meta:
+                    started = time.monotonic() - (time.time() - meta["started_at"])
+                    break
+            if proc.poll() is not None:
+                raise RuntimeError("capture exited before publishing metadata")
+            time.sleep(.05)
         else:
-            countdown(args.still, "PHASE 3 / EMPTY: walk out of the sensing area "
-                                  "and stay away.")
-    proc.wait()
+            raise RuntimeError("capture did not publish metadata")
+        elapsed = 0.0
+        phases = [(args.empty, "EMPTY: leave the sensing area"),
+                  (args.walk, "WALK: walk back and forth across the area"),
+                  (args.still, "STILL: stand still in the area"),
+                  (args.empty2, "EMPTY: leave the sensing area")]
+        for duration, prompt in phases:
+            print(f"\n>>> {prompt}", flush=True)
+            elapsed += duration
+            while time.monotonic() - started < elapsed and proc.poll() is None:
+                left = elapsed - (time.monotonic() - started)
+                print(f"    {left:5.1f}s  ", end="\r", flush=True)
+                time.sleep(.1)
+        if proc.wait() != 0:
+            raise RuntimeError("capture failed")
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+    score_file(out, thr, 10.0, args.empty, args.walk, args.still, args.empty2,
+               calibration=calibration)
 
-    s = io.load(out)
-    r = detect.detect(s, threshold=thr)
-    if not r.detections:
-        print("no data captured")
-        return 1
-
-    # Score each detection with the phase it falls in.
-    def phase_of(t: float) -> str:
-        for i in range(4):
-            if marks[i] <= t < marks[i + 1]:
-                return names[i]
-        return names[-1]
-
-    rows = [(d.t, d.motion, phase_of(d.t)) for d in r.detections]
-    by_phase: dict[str, list[float]] = {n: [] for n in names}
-    for _t, m, p in rows:
-        by_phase[p].append(m)
-
-    print(f"\n{'phase':<8}{'n':>6}{'median':>9}{'p95':>9}{'max':>9}{'alarm%':>9}")
-    print("-" * 50)
-    for n in names:
-        v = np.array(by_phase[n]) if by_phase[n] else np.zeros(0)
-        if len(v) == 0:
-            continue
-        alarm = float(np.mean(v >= r.threshold)) * 100 if r.threshold is not None else float("nan")
-        print(f"{n:<8}{len(v):>6}{np.median(v):>9.2f}{np.percentile(v,95):>9.2f}"
-              f"{v.max():>9.2f}{alarm:>8.1f}%")
-
-    walk = np.array(by_phase["WALK"])
-    still = np.array(by_phase["STILL"])
-    empty = np.concatenate([by_phase["EMPTY"]])
-
-    # Separation: how many robust sigmas of empty-room spread separate walking
-    # from standing still. This is the number that decides whether the system
-    # has any real discriminating power.
-    def sep(a, b):
-        if len(a) == 0 or len(b) == 0:
-            return float("nan")
-        return (np.median(a) - np.median(b)) / (np.std(empty) + 1e-9)
-
-    print("\ndiscrimination (median score difference in empty-room sigmas):")
-    print(f"  WALK  vs EMPTY : {sep(walk, empty):+.2f} sigma")
-    print(f"  STILL vs EMPTY : {sep(still, empty):+.2f} sigma")
-    print(f"  WALK  vs STILL : {sep(walk, still):+.2f} sigma")
-
-    # Detection latency: first alarm after the walk phase begins.
-    lat = None
-    if r.threshold is not None:
-        for t, m, p in rows:
-            if p == "WALK" and m >= r.threshold:
-                lat = t - marks[1]
-                break
-    print(f"\ndetection latency after walk onset: "
-          f"{'%.1f s' % lat if lat is not None else 'NOT DETECTED'}")
-
-    summary = {
-        "threshold": r.threshold,
-        "marks": marks,
-        "phases": {n: {"n": len(by_phase[n]),
-                       "median": float(np.median(by_phase[n])) if by_phase[n] else None,
-                       "p95": float(np.percentile(by_phase[n], 95)) if by_phase[n] else None,
-                       "max": float(np.max(by_phase[n])) if by_phase[n] else None}
-                   for n in names},
-        "sigma_walk_vs_empty": float(sep(walk, empty)),
-        "sigma_still_vs_empty": float(sep(still, empty)),
-        "sigma_walk_vs_still": float(sep(walk, still)),
-        "detection_latency_s": lat,
-        "fine_rate_hz": r.fine_rate_hz,
-        "sweep_interval_s": r.sweep_interval_s,
-        "capture": str(out),
-    }
-    (OUT / "walktest.json").write_text(json.dumps(summary, indent=1))
-    print(f"\nwrote {OUT/'walktest.json'}")
     return 0
 
 
