@@ -419,7 +419,8 @@ class Radar:
         a.add_patch(FancyBboxPatch((0.005, 0.22), 0.115, 0.60,
                                    boxstyle="round,pad=0.008",
                                    transform=a.transAxes,
-                                   facecolor=RED if occ else "#1f7a4d",
+                                   facecolor=("#39414f" if not snap["fresh"] else
+                                              RED if occ else "#1f7a4d"),
                                    edgecolor="none"))
         a.text(0.0625, 0.52, "NO DATA" if not snap["fresh"] else "MOTION" if occ else "CLEAR",
                transform=a.transAxes, ha="center", va="center",
