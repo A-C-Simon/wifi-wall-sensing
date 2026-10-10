@@ -37,6 +37,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from sensing import detect, features as F, io  # noqa: E402
+from sensing.stream import FineEnergy  # noqa: E402
 from common import build_core  # noqa: E402
 
 OUT = ROOT / "out"
@@ -64,6 +65,8 @@ class State:
         self.fine_mx: collections.deque = collections.deque(maxlen=40000)
         self.fine_sd: collections.deque = collections.deque(maxlen=40000)
         self.fine_chg: collections.deque = collections.deque(maxlen=40000)
+        self.fine_energy = collections.deque(maxlen=40000)
+        self.energy_filter = None
         self.calibration = None
         self.sweeps: list[tuple[float, dict]] = []
         self.ap_keys: list[str] = []
@@ -78,6 +81,17 @@ class State:
         self.phase: str = ""
         self.phase_left: float = 0.0
         self.phase_total: float = 0.0
+
+    def append_fine(self, record: dict):
+        """Append a bucket under the state lock, preserving filter continuity."""
+        if self.energy_filter is None:
+            self.energy_filter = FineEnergy(self.win_s)
+        energy = self.energy_filter.update(record["t"], record["rssi"])
+        for target, key in ((self.fine_t, "t"), (self.fine_rssi, "rssi"),
+                            (self.fine_mn, "min"), (self.fine_mx, "max"),
+                            (self.fine_sd, "sd"), (self.fine_chg, "chg")):
+            target.append(record[key])
+        self.fine_energy.append(energy)
 
     def snapshot(self) -> dict:
         """Consistent copy of every series, taken under a single lock.
@@ -95,6 +109,7 @@ class State:
                 "mx": np.array(self.fine_mx),
                 "sd": np.array(self.fine_sd),
                 "chg": np.array(self.fine_chg),
+                "energy": np.array(self.fine_energy),
                 "sweeps": [(x[0], dict(x[1])) for x in self.sweeps[-60:]],
                 "keys": list(self.ap_keys),
                 "meta": dict(self.meta),
@@ -156,12 +171,7 @@ def reader(path: Path, st: State, proc_holder: dict) -> None:
                     st.start = time.monotonic() - (time.time() - o["started_at"])
                 st.ready.set()
             elif kind == "fine":
-                st.fine_t.append(o["t"])
-                st.fine_rssi.append(o["rssi"])
-                st.fine_mn.append(o["min"])
-                st.fine_mx.append(o["max"])
-                st.fine_sd.append(o["sd"])
-                st.fine_chg.append(o["chg"])
+                st.append_fine(o)
             elif kind == "sweep":
                 aps = io.scan_aps(o["aps"])
                 if st.sweeps and o["t"] - st.sweeps[-1][0] < 1.0:
@@ -195,6 +205,11 @@ def scores(snap: dict, win_s: float, calibration=None) -> tuple[np.ndarray, np.n
         keys = [k for k in keys if counts[k] >= max(1, len(snap["sweeps"]) // 3)]
     sw = snap["sweeps"]
     mat = np.array([[float(aps.get(k, np.nan)) for k in keys] for _, aps in sw])
+    if "energy" in snap:
+        motion = detect.fuse_scores(
+            snap["t"], snap["energy"], np.array([t for t, _ in sw]),
+            mat.reshape(len(sw), len(keys)), calibration=calibration)[0]
+        return snap["t"], motion
     result = detect.motion_score_arrays(
         snap["t"], snap["rssi"], snap["sd"], snap["chg"],
         np.array([t for t, _ in sw]), mat.reshape(len(sw), len(keys)),

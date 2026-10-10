@@ -122,6 +122,14 @@ def motion_score_arrays(ft, rssi, sd, chg, st, mat, win_s=10.0,
         z = np.zeros(0)
         return z, z, z, z, z, 0.0, 0.0
     energy, ff = _fine_energy(ft, rssi, sd, chg, win_s)
+    motion, fine_score, sweep_score, sweep_l1, interval = fuse_scores(
+        ft, energy, st, mat, min_sweep_l1, calibration)
+    return (ft, motion, fine_score, sweep_score, sweep_l1, interval,
+            float(np.mean(ff[:, 2])))
+
+
+def fuse_scores(ft, energy, st, mat, min_sweep_l1=3.0, calibration=None):
+    """Normalize fine energy and fuse it with timestamped sweep evidence."""
     if calibration is None:
         fine_score = F.zscore_robust(energy)
     else:
@@ -157,8 +165,7 @@ def motion_score_arrays(ft, rssi, sd, chg, st, mat, win_s=10.0,
     motion = np.maximum(fine_score, sweep_score)
     # The threshold is measured on this fused statistic. Sweep ratio scores
     # and fine MAD scores are different units, so neither is a probability.
-    return (ft, motion, fine_score, sweep_score, sweep_l1, interval,
-            float(np.mean(ff[:, 2])))
+    return motion, fine_score, sweep_score, sweep_l1, interval
 
 
 def baseline_threshold(session, win_s: float = 10.0, k: float = 6.0,
