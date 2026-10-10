@@ -100,6 +100,7 @@ def cmd_repeat_test(args) -> int:
         "mean_different_position_db": md,
         "n_positions": len(same),
     }
+    B.meta.pop("verdict", None)
     B.save(args.b)
     print(f"\nrecorded in {args.b}")
     return 0 if ok else 2
@@ -216,8 +217,19 @@ def cmd_validate_map(args) -> int:
     import numpy as np
     from sensing.features import _fill_columns
 
-    M = _fill_columns(rm.matrix())
+    matrix = rm.matrix()
+    shared = np.all(np.isfinite(matrix), axis=0)
     n = len(rm.points)
+    if n < 2 or shared.sum() < max(5, int(np.ceil(len(rm.keys) / 2))):
+        rm.meta["verdict"] = "unusable"
+        rm.save(mp)
+        print("map needs at least two cells and five shared measured anchors "
+              "covering at least half its anchor set")
+        return 2
+    # Use exactly the dimensions available to the live matcher. Filling across
+    # cells would manufacture separation from readings measured elsewhere.
+    keys = [k for k, valid in zip(rm.keys, shared) if valid]
+    M = matrix[:, shared]
     D = np.abs(M[:, None, :] - M[None, :, :]).sum(axis=2)
     np.fill_diagonal(D, np.inf)
 
@@ -231,15 +243,21 @@ def cmd_validate_map(args) -> int:
         s_ = io.load(f)
         if len(s_.sweeps) < 2:
             continue
-        mat = np.array([[float(sw.aps.get(k, np.nan)) for k in rm.keys]
+        mat = np.array([[float(sw.aps.get(k, np.nan)) for k in keys]
                         for sw in s_.sweeps], dtype=float)
+        if not np.all(np.isfinite(mat)):
+            continue
         d = np.abs(np.diff(_fill_columns(mat), axis=0)).sum(axis=1)
         if len(d):
             noise.append(float(np.median(d)))
     wn = float(np.median(noise)) if noise else float(args.default_noise)
 
     closest = float(D.min())
-    sep_ratio = closest / wn if wn > 1e-9 else float("inf")
+    if not np.isfinite(wn) or wn < 0:
+        raise ValueError("within-cell noise must be finite and nonnegative")
+    # Identical, perfectly quiet cells have zero separation, not infinite
+    # separability. A small floor also keeps saved JSON finite.
+    sep_ratio = closest / max(wn, 1e-9)
     mean_between = float(D[np.isfinite(D)].mean())
 
     print(f"map: {n} regions x {len(rm.keys)} anchors")
@@ -248,7 +266,8 @@ def cmd_validate_map(args) -> int:
     print(f"  mean region pair           : {mean_between:.1f} dB")
 
     rep = rm.meta.get("repeatability")
-    usable = sep_ratio >= args.sep_threshold
+    usable = (np.isfinite(args.sep_threshold) and args.sep_threshold > 0
+              and sep_ratio >= args.sep_threshold)
     if rep is not None:
         rp = rep.get("mean_same_position_db", float("nan"))
         rs = rep.get("mean_different_position_db", float("nan"))
@@ -257,7 +276,11 @@ def cmd_validate_map(args) -> int:
         print(f"  spatial separation         : {rs:.1f} dB between spots")
         # A live vector is matched against an older map, so the drift between
         # sessions is the noise floor that actually matters.
-        usable = usable and (rs > rp * args.repeat_margin)
+        usable = usable and (np.isfinite(rp) and np.isfinite(rs) and rp >= 0
+                             and rep.get("n_positions", 0) >= 2
+                             and np.isfinite(args.repeat_margin)
+                             and args.repeat_margin > 0
+                             and rs > rp * args.repeat_margin)
         print(f"  usable                     : {usable}")
         if rs <= rp * args.repeat_margin:
             print("    -> SESSION DRIFT EXCEEDS SPATIAL SIGNAL. A body at the same")

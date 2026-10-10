@@ -219,6 +219,9 @@ def cmd_coarsen(args) -> int:
     rm = radiomap.RadioMap(points=out, keys=keys,
                            meta=dict(fine.meta, coarsened_from=str(src),
                                      extent=step))
+    # Validation and repeatability describe the original cell geometry.
+    for key in ("verdict", "repeatability", "separability_ratio", "within_cell_noise_db"):
+        rm.meta.pop(key, None)
     mp = Path(args.out)
     rm.save(mp)
     viz.plot_radio_map(rm, str(OUT / "radiomap_coarse.png"))
