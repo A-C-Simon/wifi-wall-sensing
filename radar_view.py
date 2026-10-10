@@ -114,6 +114,7 @@ class Radar:
                   "'python3 wifisense.py calibrate-distance' to fit your own.")
 
         self._last_sweep = -1.0
+        self.matcher = radiomap.Matcher(self.rmap) if self.rmap else None
 
         plt.rcParams.update({
             "figure.facecolor": BG, "axes.facecolor": BG, "text.color": FG,
@@ -194,12 +195,14 @@ class Radar:
             return
         if not self.map_ok:
             return
-        res = radiomap.localize(self.rmap, aps, top=1)
+        res = self.matcher.localize(aps, top=2)
         if not res:
             return
         p, dist = res[0]
         strength = max(0.0, min(1.0, 1.0 - dist / 60.0))
-        self.blips.add(t, p.x, p.y, strength, occ)
+        alt = (res[1][0].x, res[1][0].y) if len(res) > 1 else None
+        margin = res[1][1] - dist if len(res) > 1 else float("nan")
+        self.blips.add(t, p.x, p.y, strength, occ, alt, margin)
 
     # --------------------------------------------------------------- panels
     @staticmethod
@@ -333,7 +336,7 @@ class Radar:
         ax.annotate("laptop", (self.laptop[0], self.laptop[1]),
                     textcoords="offset points", xytext=(0, -16),
                     ha="center", color=LAPTOP_C, fontsize=8)
-        rr, rt = self.to_polar(*self._router_xy())
+        rr, rt = self._router_xy()
         ax.scatter([rr], [rt], marker="s", s=150, color=ROUTER_C,
                    edgecolor="white", lw=0.9, zorder=6)
         ax.annotate("router", (rr, rt), textcoords="offset points",

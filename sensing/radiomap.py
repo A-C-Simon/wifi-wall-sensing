@@ -125,25 +125,36 @@ def anchor_weights(mat: np.ndarray) -> np.ndarray:
 def localize(rmap: RadioMap, live: dict[str, float],
              top: int = 3) -> list[tuple[Fingerprint, float]]:
     """Rank surveyed cells by distance to a live multi-AP vector."""
-    if not rmap.points:
-        return []
-    mat = _impute(rmap.matrix())
-    w = anchor_weights(mat)
+    return Matcher(rmap).localize(live, top)
 
-    lv = np.full(len(rmap.keys), np.nan)
-    for j, k in enumerate(rmap.keys):
-        if k in live:
-            lv[j] = float(live[k])
-    med = np.nanmedian(mat, axis=0)
-    for j in range(len(lv)):
-        if not np.isfinite(lv[j]):
-            lv[j] = med[j]
-    if not np.all(np.isfinite(lv)):
-        return []
 
-    scored = [(p, distance(lv, mat[i], w)) for i, p in enumerate(rmap.points)]
-    scored.sort(key=lambda t: t[1])
-    return scored[:top]
+class Matcher:
+    """Prepared map for repeated queries, using measured shared anchors only.
+
+    Cell order cannot be used to fill gaps: adjacent rows need not be adjacent
+    in space. All candidate cells must use the same observed dimensions. At
+    least five anchors and half the map's anchors must support a query.
+    """
+
+    def __init__(self, rmap: RadioMap):
+        self.points = list(rmap.points)
+        self.keys = list(rmap.keys)
+        self.mat = rmap.matrix()
+        self.shared = np.all(np.isfinite(self.mat), axis=0)
+
+    def localize(self, live: dict[str, float],
+                 top: int = 3) -> list[tuple[Fingerprint, float]]:
+        if not self.points or top <= 0:
+            return []
+        lv = np.array([float(live.get(k, np.nan)) for k in self.keys])
+        valid = self.shared & np.isfinite(lv)
+        if valid.sum() < max(5, int(np.ceil(len(self.keys) / 2))):
+            return []
+        # Variation between cells is the signal being matched, not an estimate
+        # of temporal noise. Do not suppress it with inverse spatial variance.
+        ds = np.abs(self.mat[:, valid] - lv[valid]).mean(axis=1)
+        order = np.argsort(ds, kind="stable")[:top]
+        return [(self.points[i], float(ds[i])) for i in order]
 
 
 def error_metrics(rmap: RadioMap, truth: list[tuple[float, float]],

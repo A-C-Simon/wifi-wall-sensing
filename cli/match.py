@@ -18,6 +18,10 @@ def cmd_localize(args) -> int:
         print(f"no radio map at {mp}; run `wifisense calibrate` first")
         return 1
     rm = radiomap.RadioMap.load(mp)
+    if rm.meta.get("verdict") != "usable":
+        print("localisation disabled: map must pass validate-map first")
+        return 2
+    matcher = radiomap.Matcher(rm)
     s = io.load(args.capture)
     if len(s.sweeps) < 2:
         print("capture has too few fresh sweeps to localise")
@@ -30,7 +34,7 @@ def cmd_localize(args) -> int:
 
     rows = []
     for sw in s.sweeps:
-        res = radiomap.localize(rm, sw.aps, top=2)
+        res = matcher.localize(sw.aps, top=2)
         if not res:
             continue
         best, d1 = res[0]
@@ -62,10 +66,14 @@ def cmd_heatmap(args) -> int:
     if not mp.exists():
         print(f"no radio map at {mp}; run `wifisense calibrate` first"); return 1
     rm = radiomap.RadioMap.load(mp)
+    if rm.meta.get("verdict") != "usable":
+        print("localisation disabled: map must pass validate-map first")
+        return 2
+    matcher = radiomap.Matcher(rm)
     s = io.load(args.capture)
     visits: dict[tuple[float, float], int] = {}
     for sw in s.sweeps:
-        res = radiomap.localize(rm, sw.aps, top=1)
+        res = matcher.localize(sw.aps, top=1)
         if not res:
             continue
         p, _ = res[0]
