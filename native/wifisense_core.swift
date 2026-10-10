@@ -112,12 +112,19 @@ func parseArgs() -> Opts {
     var i = 0
     while i < a.count {
         let k = a[i]
-        func next() -> String { i += 1; return i < a.count ? a[i] : "" }
+        func next() -> String {
+            i += 1
+            guard i < a.count else {
+                FileHandle.standardError.write("missing value for \(k)\n".data(using: .utf8)!)
+                exit(2)
+            }
+            return a[i]
+        }
         switch k {
         case "--iface": o.iface = next()
         case "--out": o.out = next()
-        case "--duration": o.duration = Double(next()) ?? 0
-        case "--fine-hz": o.fineHz = Double(next()) ?? 20
+        case "--duration": o.duration = Double(next()) ?? .nan
+        case "--fine-hz": o.fineHz = Double(next()) ?? .nan
         case "--no-sweep": o.sweep = false
         case "--quiet": o.quiet = true
         default:
@@ -125,6 +132,10 @@ func parseArgs() -> Opts {
             exit(2)
         }
         i += 1
+    }
+    guard o.duration.isFinite && o.duration >= 0 && o.fineHz.isFinite && o.fineHz > 0 else {
+        FileHandle.standardError.write("duration must be finite and nonnegative; fine-hz must be finite and positive\n".data(using: .utf8)!)
+        exit(2)
     }
     return o
 }
@@ -150,8 +161,19 @@ final class Stopper {
     static let flag = NSLock()
     static var stop = false
 }
-signal(SIGINT) { _ in Stopper.flag.lock(); Stopper.stop = true; Stopper.flag.unlock() }
-signal(SIGTERM) { _ in Stopper.flag.lock(); Stopper.stop = true; Stopper.flag.unlock() }
+// Locks are unsafe inside POSIX signal handlers. Dispatch signal sources run
+// handlers on a normal queue, where taking the stop lock is safe.
+signal(SIGINT, SIG_IGN)
+signal(SIGTERM, SIG_IGN)
+let signalSources = [SIGINT, SIGTERM].map { sig -> DispatchSourceSignal in
+    let source = DispatchSource.makeSignalSource(signal: sig, queue: .global())
+    source.setEventHandler {
+        Stopper.flag.lock(); Stopper.stop = true; Stopper.flag.unlock()
+    }
+    source.resume()
+    return source
+}
+let workers = DispatchGroup()
 
 func shouldStop() -> Bool {
     Stopper.flag.lock(); defer { Stopper.flag.unlock() }
@@ -202,19 +224,32 @@ var fineStats = [
     "fine_errors": 0,
 ]
 
+workers.enter()
 let fineThread = Thread {
+    defer { workers.leave() }
     let bucketPeriod = 1.0 / max(opts.fineHz, 0.1)
     var rawCount = 0
+    var totalCount = 0
     var rawStart = mono()
 
     var acc: [Int] = []
     var bucketStart = mono()
-    var bucketFirstPoll = mono()
+    var previous: Int? = nil
+    var changes = 0
 
     while !shouldStop() {
         let v = iface.rssiValue()
+        if v >= 0 {
+            fineStats["fine_errors"] = (fineStats["fine_errors"] ?? 0) + 1
+            usleep(5_000)
+            previous = nil
+            continue
+        }
+        if let prev = previous, prev != v { changes += 1 }
+        previous = v
         acc.append(v)
         rawCount += 1
+        totalCount += 1
 
         let nowT = mono()
         if nowT - rawStart >= 1.0 {
@@ -235,9 +270,6 @@ let fineThread = Thread {
             var varr = 0.0
             for x in acc { let d = Double(x) - mean; varr += d * d }
             let sd = sqrt(varr / Double(acc.count))
-            var changes = 0
-            for i in 1..<acc.count where acc[i] != acc[i - 1] { changes += 1 }
-
             w.emit([
                 "type": "fine",
                 "t": nowT - t0,
@@ -251,13 +283,13 @@ let fineThread = Thread {
                 "rate": iface.transmitRate(),
             ])
             acc.removeAll(keepingCapacity: true)
+            changes = 0
             bucketStart = nowT
-            bucketFirstPoll = nowT
         }
     }
-    _ = bucketFirstPoll
+    fineStats["fine_samples"] = Double(totalCount)
     w.emit(["type": "stats", "t": mono() - t0,
-            "fine_samples": rawCount,
+            "fine_samples": totalCount,
             "fine_bucket_rate": opts.fineHz])
 }
 fineThread.stackSize = 1024 * 1024
@@ -268,7 +300,9 @@ fineThread.start()
 var sweepStats = ["sweeps": 0, "sweep_errors": 0]
 
 if opts.sweep {
+    workers.enter()
     let sweepThread = Thread {
+        defer { workers.leave() }
         var lastKey = ""
         while !shouldStop() {
             let c0 = mono()
@@ -323,10 +357,16 @@ while !shouldStop() {
     usleep(200_000)
 }
 
+// Workers may be inside a scan or writing their last bucket. Join them before
+// reading their counters or terminating the process.
+workers.wait()
+
 w.emit([
     "type": "stats",
     "t": mono() - t0,
     "raw_rate_hz": fineStats["raw_rate_hz"] ?? 0.0,
+    "fine_samples": fineStats["fine_samples"] ?? 0,
+    "fine_errors": fineStats["fine_errors"] ?? 0,
     "sweeps": sweepStats["sweeps"] ?? 0,
     "sweep_errors": sweepStats["sweep_errors"] ?? 0,
 ])
