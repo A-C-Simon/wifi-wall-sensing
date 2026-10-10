@@ -30,7 +30,6 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib
-matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch  # noqa: E402
 
@@ -380,6 +379,7 @@ class Dash:
 
 
 def main() -> int:
+    matplotlib.use("TkAgg")
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["monitor", "walktest"])
     ap.add_argument("--iface", default="en0")

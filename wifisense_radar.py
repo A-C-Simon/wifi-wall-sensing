@@ -10,7 +10,6 @@ import time
 from pathlib import Path
 
 import matplotlib
-matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 
 from common import CORE, OUT, build_core
@@ -19,6 +18,7 @@ from wifisense_live import State, reader
 
 
 def main() -> int:
+    matplotlib.use("TkAgg")
     ap = argparse.ArgumentParser()
     ap.add_argument("--iface", default="en0")
     ap.add_argument("--mode", choices=["monitor", "walktest"], default="monitor")
