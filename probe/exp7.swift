@@ -13,7 +13,11 @@ setvbuf(stdout, nil, _IOLBF, 0)
 
 @inline(__always) func now() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
 
-let iface = CWWiFiClient.shared().interface(withName: "en0")!
+let ifaceName = "en0"
+guard let iface = CWWiFiClient.shared().interface(withName: ifaceName) else {
+    FileHandle.standardError.write(Data("No WiFi interface \(ifaceName)\n".utf8))
+    exit(2)
+}
 
 /// Canonical, order-independent identity for a scan result set.
 /// BSSID is TCC-redacted so we key on (channel,width,rssi) triples.

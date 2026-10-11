@@ -6,7 +6,10 @@ import Foundation
 setvbuf(stdout, nil, _IOLBF, 0)
 @inline(__always) func now() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
 let ifaceName = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "en0"
-let iface = CWWiFiClient.shared().interface(withName: ifaceName)!
+guard let iface = CWWiFiClient.shared().interface(withName: ifaceName) else {
+    FileHandle.standardError.write(Data("No WiFi interface \(ifaceName)\n".utf8))
+    exit(2)
+}
 
 func bench(_ label: String, _ n: Int, _ f: () -> Int) {
     var v: [Int] = []

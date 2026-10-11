@@ -12,9 +12,16 @@ import Foundation
 @inline(__always)
 func now() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
 
-let secs = CommandLine.arguments.count > 1 ? (Double(CommandLine.arguments[1]) ?? 90.0) : 90.0
+let secs = CommandLine.arguments.count > 1 ? (Double(CommandLine.arguments[1]) ?? .nan) : 90.0
+guard secs.isFinite, secs > 0 else {
+    FileHandle.standardError.write(Data("Duration must be a finite positive number\n".utf8))
+    exit(2)
+}
 let ifaceName = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : "en0"
-let iface = CWWiFiClient.shared().interface(withName: ifaceName)!
+guard let iface = CWWiFiClient.shared().interface(withName: ifaceName) else {
+    FileHandle.standardError.write(Data("No WiFi interface \(ifaceName)\n".utf8))
+    exit(2)
+}
 
 func vector() -> ([String], Double) {
     let t = now()
@@ -30,7 +37,7 @@ func vector() -> ([String], Double) {
     return (rows, now() - t)
 }
 
-print("polling scanForNetworks() every 200ms for \(Int(secs))s\n")
+print("polling scanForNetworks() every 200ms for \(secs)s\n")
 
 var lastKey = ""
 var changeTimes: [Double] = []
@@ -75,7 +82,7 @@ if !deltas.isEmpty {
     print("refresh interval max : \(String(format: "%.2f", sorted.last!))s")
     print("=> effective multi-AP sampling rate: \(String(format: "%.2f Hz", 1.0 / mean)) Hz")
 }
-let avgCost = callTimes.reduce(0, +) / Double(callTimes.count)
+let avgCost = callTimes.isEmpty ? 0 : callTimes.reduce(0, +) / Double(callTimes.count)
 let cnts = Set(counts).sorted()
 print("avg scan call cost   : \(String(format: "%.1f", avgCost * 1000))ms")
 print("AP count seen        : \(cnts.map(String.init).joined(separator: ","))")

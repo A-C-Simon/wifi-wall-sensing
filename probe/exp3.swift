@@ -14,7 +14,10 @@ func now() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
 
 let gw = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "192.168.3.1"
 let ifaceName = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : "en0"
-let iface = CWWiFiClient.shared().interface(withName: ifaceName)!
+guard let iface = CWWiFiClient.shared().interface(withName: ifaceName) else {
+    FileHandle.standardError.write(Data("No WiFi interface \(ifaceName)\n".utf8))
+    exit(2)
+}
 print("iface=\(ifaceName) gateway=\(gw)\n")
 
 /// Spawns parallel `ping` streams. ICMP is used rather than a raw UDP socket
