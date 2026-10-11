@@ -48,3 +48,17 @@ class PairwiseTests(unittest.TestCase):
         for mat in (np.zeros((1, 5)), np.zeros((2, 0)), np.full((2, 5), np.nan)):
             with self.assertRaises(ValueError):
                 pairwise_summary(mat)
+
+
+class MapInputTests(unittest.TestCase):
+    def test_duplicate_keys_cannot_multiply_anchor_evidence(self):
+        with self.assertRaises(ValueError):
+            RadioMap([point("a", {"a": -60})], ["a"] * 5, {})
+
+    def test_invalid_coordinates_and_values_rejected(self):
+        for x in (None, "1", True, float("inf"), float("nan")):
+            with self.assertRaises(ValueError):
+                Fingerprint(x, 0, "bad", 0, {"a": -60}, 3)
+        for values in ({"a": float("nan")}, {"a": True}, {"": -60}):
+            with self.assertRaises(ValueError):
+                point("bad", values)

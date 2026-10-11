@@ -14,6 +14,7 @@ localisation method that works on RSSI-only, single-receiver hardware.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
@@ -29,6 +30,21 @@ class Fingerprint:
     # key -> rssi, only keys with valid readings
     rssi: dict[str, float]
     n_samples: int
+
+    def __post_init__(self):
+        for name in ("x", "y", "t", "n_samples"):
+            value = getattr(self, name)
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+                raise ValueError(f"fingerprint {name} must be finite and numeric")
+        if self.n_samples <= 0 or int(self.n_samples) != self.n_samples:
+            raise ValueError("fingerprint sample count must be a positive integer")
+        if not isinstance(self.rssi, dict):
+            raise ValueError("fingerprint RSSI must be an object")
+        for key, value in self.rssi.items():
+            if (not isinstance(key, str) or not key
+                    or not isinstance(value, (int, float)) or isinstance(value, bool)
+                    or not math.isfinite(value)):
+                raise ValueError("fingerprint anchors need nonempty keys and finite numeric values")
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -47,6 +63,16 @@ class RadioMap:
     points: list[Fingerprint]
     keys: list[str]
     meta: dict
+
+    def __post_init__(self):
+        if not isinstance(self.keys, list) or any(not isinstance(k, str) or not k for k in self.keys):
+            raise ValueError("radio map anchor keys must be nonempty strings")
+        if len(set(self.keys)) != len(self.keys):
+            raise ValueError("radio map anchor keys must be unique")
+        if not isinstance(self.meta, dict):
+            raise ValueError("radio map metadata must be an object")
+        if not isinstance(self.points, list) or any(not isinstance(p, Fingerprint) for p in self.points):
+            raise ValueError("radio map points must be fingerprints")
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(json.dumps({
