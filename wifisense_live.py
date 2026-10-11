@@ -161,8 +161,13 @@ def reader(path: Path, st: State, proc_holder: dict) -> None:
             continue
         try:
             o = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+            io.validate_record(o)
+            if o.get("type") == "fine" and st.fine_t and o["t"] <= st.fine_t[-1]:
+                raise ValueError("fine timestamps must be strictly increasing")
+        except (json.JSONDecodeError, ValueError) as e:
+            with st.lock:
+                st.error = f"invalid capture record: {e}"
+            break
         kind = o.get("type")
         with st.lock:
             if kind == "meta":

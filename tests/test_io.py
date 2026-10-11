@@ -10,6 +10,40 @@ from sensing import io
 
 
 class CaptureIOTests(unittest.TestCase):
+    def test_corrupt_complete_records_have_file_and_line_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "capture"
+            for bad in ('not json', 'null', '[]', '{"type":"fine","t":1}',
+                        '{"type":"sweep","t":NaN,"aps":[]}',
+                        '{"type":"sweep","t":1,"aps":null}'):
+                path.write_text('{"type":"meta"}\n' + bad + '\n')
+                with self.assertRaisesRegex(ValueError, 'capture:2:'):
+                    io.load(path)
+
+    def test_incomplete_final_json_keeps_prior_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "capture"
+            path.write_text('{"type":"meta","iface":"en0"}\n{"type":')
+            self.assertEqual(io.load(path).meta["iface"], "en0")
+
+    def test_invalid_fine_values_are_rejected_before_filtering(self):
+        record = dict(type="fine", t=1, n=10, rssi=-60, min=-61, max=-59,
+                      sd=1, chg=2, noise=-90, rate=100)
+        for field, value in (("n", 0), ("n", True), ("rssi", float("nan")),
+                             ("rssi", -70), ("sd", -1), ("chg", 11), ("t", -1)):
+            with self.assertRaises(ValueError):
+                io.validate_record(dict(record, **{field: value}))
+
+    def test_live_corruption_is_reported_without_mutating_series(self):
+        from wifisense_live import State, reader
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "capture"
+            path.write_text('{"type":"fine","t":1,"rssi":NaN}\n')
+            st = State()
+            reader(path, st, {})
+            self.assertIn("invalid capture record", st.error)
+            self.assertEqual(len(st.fine_t), 0)
+
     def test_anchor_aggregation_does_not_depend_on_row_order(self):
         rows = [{"ch": 1, "w": 2, "rssi": r} for r in (-70, -40, -50)]
         self.assertEqual(io.scan_aps(rows), {"1/2": -40})

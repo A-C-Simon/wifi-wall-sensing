@@ -62,10 +62,57 @@ def _key(ch: int, w: int) -> str:
     return f"{ch}/{w}"
 
 
+def _number(value, name: str) -> float:
+    try:
+        valid = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    except OverflowError:
+        valid = False
+    if not valid:
+        raise ValueError(f"{name} must be a finite number")
+    return value
+
+
+def validate_record(record) -> dict:
+    """Check a decoded capture before it can alter a filter or time axis."""
+    if not isinstance(record, dict):
+        raise ValueError("capture record must be an object")
+    kind = record.get("type")
+    if kind in ("fine", "sweep", "stats"):
+        if _number(record.get("t"), "t") < 0:
+            raise ValueError("capture timestamp must be nonnegative")
+    if kind == "meta" and "started_at" in record:
+        _number(record["started_at"], "started_at")
+    if kind == "fine":
+        for key in ("n", "rssi", "min", "max", "sd", "chg", "noise", "rate"):
+            _number(record.get(key), key)
+        if record["n"] <= 0 or int(record["n"]) != record["n"]:
+            raise ValueError("fine sample count must be a positive integer")
+        if not record["min"] <= record["rssi"] <= record["max"] < 0:
+            raise ValueError("fine RSSI must lie within negative min/max bounds")
+        if record["sd"] < 0 or record["rate"] < 0:
+            raise ValueError("fine spread and transmit rate must be nonnegative")
+        if not 0 <= record["chg"] <= record["n"] or int(record["chg"]) != record["chg"]:
+            raise ValueError("fine changes must be an integer between zero and sample count")
+    if kind == "sweep":
+        cost = _number(record.get("cost_ms", 0), "cost_ms")
+        if cost < 0:
+            raise ValueError("scan cost must be nonnegative")
+        scan_aps(record.get("aps"))
+    return record
+
+
 def scan_aps(rows: list[dict]) -> dict[str, int]:
     """Collapse redacted co-channel APs by strongest RSSI, independent of order."""
+    if not isinstance(rows, list):
+        raise ValueError("scan anchors must be a list")
     aps = {}
     for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("scan anchor must be an object")
+        for key in ("ch", "w", "rssi"):
+            value = _number(row.get(key), key)
+            if int(value) != value:
+                raise ValueError(f"scan {key} must be an integer")
         key = _key(row["ch"], row["w"])
         value = row["rssi"]
         if math.isfinite(value) and value < 0:
@@ -86,14 +133,20 @@ def load(path: str | Path, dedupe_sweeps: bool = True) -> Session:
         raise FileNotFoundError(p)
     s = Session()
     with p.open() as fh:
-        for line in fh:
+        for line_no, line in enumerate(fh, 1):
+            complete = line.endswith("\n")
             line = line.strip()
             if not line:
                 continue
             try:
                 o = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+                validate_record(o)
+            except (json.JSONDecodeError, ValueError) as e:
+                # A stopped writer can leave an incomplete final JSON record.
+                # Complete corrupt records must not silently change results.
+                if not complete and isinstance(e, json.JSONDecodeError):
+                    continue
+                raise ValueError(f"{p}:{line_no}: {e}") from e
             t = o.get("type")
             if t == "meta":
                 s.meta = o
@@ -110,6 +163,8 @@ def load(path: str | Path, dedupe_sweeps: bool = True) -> Session:
     # Concurrent workers can finish writes out of timestamp order. Keep the
     # time axes monotonic before differencing or resampling them.
     s.fine.sort(key=lambda f: f.t)
+    if any(a.t == b.t for a, b in zip(s.fine, s.fine[1:])):
+        raise ValueError(f"{p}: duplicate fine timestamps")
     s.sweeps.sort(key=lambda sw: sw.t)
     if dedupe_sweeps:
         burst_gap = 1.0
