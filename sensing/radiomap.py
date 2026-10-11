@@ -178,8 +178,12 @@ class Matcher:
 def error_metrics(rmap: RadioMap, truth: list[tuple[float, float]],
                   pred: list[tuple[float, float]]) -> dict:
     """Median and mean localisation error over a sequence of predictions."""
-    if not truth or not pred:
+    if len(truth) != len(pred):
+        raise ValueError("truth and prediction counts must match")
+    if not truth:
         return {}
+    if not np.all(np.isfinite(truth)) or not np.all(np.isfinite(pred)):
+        raise ValueError("truth and predictions must contain finite coordinates")
     errs = []
     for (tx, ty), (px, py) in zip(truth, pred):
         errs.append(float(np.hypot(tx - px, ty - py)))

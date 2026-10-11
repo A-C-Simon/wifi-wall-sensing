@@ -31,24 +31,32 @@ def cmd_localize(args) -> int:
     if args.truth:
         truth = [tuple(map(float, ln.split(",")))
                  for ln in Path(args.truth).read_text().split() if ln.strip()]
+        if (len(truth) != len(s.sweeps)
+                or any(len(p) != 2 or not np.all(np.isfinite(p)) for p in truth)):
+            print("truth needs one finite x,y pair per fresh sweep, including unresolved sweeps")
+            return 1
 
     rows = []
-    for sw in s.sweeps:
+    matched_truth = []
+    for i, sw in enumerate(s.sweeps):
         res = matcher.localize(sw.aps, top=2)
         if not res:
             continue
         best, d1 = res[0]
         d2 = res[1][1] if len(res) > 1 else float("nan")
         rows.append((sw.t, best, d1, d2))
+        if truth:
+            matched_truth.append(truth[i])
         print(f"  t={sw.t:7.1f}s -> cell {best.label:>6}  "
               f"d1={d1:6.1f} dB  margin={(d2-d1):5.1f} dB")
 
     if truth:
         preds = [(b.x, b.y) for _, b, _, _ in rows]
-        n = min(len(truth), len(preds))
+        n = len(preds)
+        print(f"resolved {n}/{len(s.sweeps)} sweeps; {len(s.sweeps) - n} unresolved")
         if n:
             print(f"\nlocalisation error vs {n} ground-truth points:")
-            print(json.dumps(radiomap.error_metrics(rm, truth[:n], preds[:n]), indent=1))
+            print(json.dumps(radiomap.error_metrics(rm, matched_truth, preds), indent=1))
 
     series = [(t, d1) for t, _, d1, _ in rows]
     if series:
