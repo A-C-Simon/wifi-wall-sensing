@@ -38,6 +38,7 @@ sys.path.insert(0, str(ROOT))
 
 from sensing import detect, features as F, io  # noqa: E402
 from sensing.stream import FineEnergy  # noqa: E402
+from common import finite_float, positive_float, positive_int
 from common import build_core  # noqa: E402
 
 OUT = ROOT / "out"
@@ -399,16 +400,16 @@ class Dash:
 
 
 def main() -> int:
-    matplotlib.use("TkAgg")
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["monitor", "walktest"])
     ap.add_argument("--iface", default="en0")
-    ap.add_argument("--empty", type=int, default=45)
-    ap.add_argument("--walk", type=int, default=45)
-    ap.add_argument("--still", type=int, default=45)
-    ap.add_argument("--threshold", type=float, default=None)
-    ap.add_argument("--win", type=float, default=10.0)
+    ap.add_argument("--empty", type=positive_int, default=45)
+    ap.add_argument("--walk", type=positive_int, default=45)
+    ap.add_argument("--still", type=positive_int, default=45)
+    ap.add_argument("--threshold", type=finite_float, default=None)
+    ap.add_argument("--win", type=positive_float, default=10.0)
     args = ap.parse_args()
+    matplotlib.use("TkAgg")
 
     build_core()
 

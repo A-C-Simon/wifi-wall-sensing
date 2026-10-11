@@ -49,7 +49,7 @@ def cmd_calibrate(args) -> int:
             print(f"[{idx+1}/{len(cells)}] stand at x={x:.1f}m y={y:.1f}m "
                   f"for {hold:.0f}s   (starts {at/60:.1f} min in)", flush=True)
             subprocess.run([str(CORE), "--iface", args.iface, "--out", str(f),
-                            "--duration", str(int(hold)), "--fine-hz", "20", "--quiet"],
+                            "--duration", str(hold), "--fine-hz", "20", "--quiet"],
                            check=True)
             s = io.load(f)
             fp = fingerprint_from_session(s, x, y)

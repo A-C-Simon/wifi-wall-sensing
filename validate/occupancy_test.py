@@ -34,6 +34,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from common import finite_float, positive_float, nonnegative_float, positive_int
+
 from sensing import detect, io, viz  # noqa: E402
 
 OUT = ROOT / "out"
@@ -121,11 +123,11 @@ def paired_summary(empty_blocks, occupied_blocks, n=2000, seed=0):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--iface", default="en0")
-    ap.add_argument("--block", type=float, default=90.0, help="seconds per block")
-    ap.add_argument("--reps", type=int, default=3, help="A/B pairs")
-    ap.add_argument("--lead", type=float, default=20.0)
-    ap.add_argument("--threshold", type=float, default=3.0)
-    ap.add_argument("--win", type=float, default=10.0)
+    ap.add_argument("--block", type=positive_float, default=90.0, help="seconds per block")
+    ap.add_argument("--reps", type=positive_int, default=3, help="A/B pairs")
+    ap.add_argument("--lead", type=nonnegative_float, default=20.0)
+    ap.add_argument("--threshold", type=finite_float, default=3.0)
+    ap.add_argument("--win", type=positive_float, default=10.0)
     ap.add_argument("--out", default=str(OUT / "occupancy.jsonl"))
     ap.add_argument("--analyse-only", action="store_true",
                     help="score an existing capture instead of recording")
@@ -167,7 +169,7 @@ def main() -> int:
         if out.exists():
             out.unlink()
         proc = subprocess.Popen([str(CORE), "--iface", args.iface, "--out", str(out),
-                                 "--duration", str(int(total)), "--fine-hz", "20",
+                                 "--duration", str(total), "--fine-hz", "20",
                                  "--quiet"])
         try:
             if proc.wait() != 0:

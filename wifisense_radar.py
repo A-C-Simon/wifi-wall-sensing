@@ -12,36 +12,37 @@ from pathlib import Path
 import matplotlib
 import matplotlib.pyplot as plt
 
+from common import finite_float, positive_float, positive_int, nonnegative_int
 from common import CORE, OUT, build_core
 from radar_view import Blips, Radar
 from wifisense_live import State, reader
 
 
 def main() -> int:
-    matplotlib.use("TkAgg")
     ap = argparse.ArgumentParser()
     ap.add_argument("--iface", default="en0")
     ap.add_argument("--mode", choices=["monitor", "walktest"], default="monitor")
-    ap.add_argument("--lead", type=int, default=20,
+    ap.add_argument("--lead", type=nonnegative_int, default=20,
                     help="seconds before phase 1, to read the schedule")
-    ap.add_argument("--empty", type=int, default=40)
-    ap.add_argument("--walk", type=int, default=60)
-    ap.add_argument("--still", type=int, default=40)
-    ap.add_argument("--threshold", type=float, default=None)
-    ap.add_argument("--win", type=float, default=10.0)
-    ap.add_argument("--room-x", type=float, default=7.0)
-    ap.add_argument("--room-y", type=float, default=6.0)
-    ap.add_argument("--laptop-x", type=float, default=1.0)
-    ap.add_argument("--laptop-y", type=float, default=1.0)
-    ap.add_argument("--router-range", type=float, default=4.0)
-    ap.add_argument("--router-bearing", type=float, default=315.0,
+    ap.add_argument("--empty", type=positive_int, default=40)
+    ap.add_argument("--walk", type=positive_int, default=60)
+    ap.add_argument("--still", type=positive_int, default=40)
+    ap.add_argument("--threshold", type=finite_float, default=None)
+    ap.add_argument("--win", type=positive_float, default=10.0)
+    ap.add_argument("--room-x", type=positive_float, default=7.0)
+    ap.add_argument("--room-y", type=positive_float, default=6.0)
+    ap.add_argument("--laptop-x", type=finite_float, default=1.0)
+    ap.add_argument("--laptop-y", type=finite_float, default=1.0)
+    ap.add_argument("--router-range", type=positive_float, default=4.0)
+    ap.add_argument("--router-bearing", type=finite_float, default=315.0,
                     help="degrees clockwise from north, laptop -> router "
                          "(315 = NW, 0 = N, 90 = E)")
-    ap.add_argument("--router-rssi", type=float, default=-55.0,
+    ap.add_argument("--router-rssi", type=finite_float, default=-55.0,
                     help="measured RSSI of the router at the laptop")
-    ap.add_argument("--pathloss", type=float, default=2.7)
+    ap.add_argument("--pathloss", type=positive_float, default=2.7)
     ap.add_argument("--radiomap", default=None)
     args = ap.parse_args()
+    matplotlib.use("TkAgg")
 
     build_core()
 

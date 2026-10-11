@@ -302,9 +302,17 @@ def cmd_calibrate_distance(args) -> int:
     log-distance model is fitted, which then lets every other anchor's range
     be estimated from its RSSI.
     """
-    build_core()
-    pts = [float(x) for x in args.points.split(",")]
+    try:
+        pts = [float(x) for x in args.points.split(",")]
+    except ValueError:
+        print("distance points must be comma-separated numbers")
+        return 1
     hold = args.hold
+    if (len(set(pts)) < 2 or any(not np.isfinite(d) or d <= 0 for d in pts)
+            or not np.isfinite(hold) or hold <= 0):
+        print("need two distinct positive finite distances and a positive finite hold")
+        return 1
+    build_core()
     print(f"distance calibration at {pts} m, {hold:.0f}s each\n")
     print("Keep the laptop with you, face the access point, and hold still.")
     print("The AP must be the one you are associated with (the measured link).\n")
@@ -314,7 +322,7 @@ def cmd_calibrate_distance(args) -> int:
         f = OUT / f"dist_{d:.1f}m.jsonl"
         input(f"  stand {d:.1f} m from the access point, then press Enter... ")
         subprocess.run([str(CORE), "--iface", args.iface, "--out", str(f),
-                        "--duration", str(int(hold)), "--fine-hz", "20",
+                        "--duration", str(hold), "--fine-hz", "20",
                         "--no-sweep", "--quiet"], check=True)
         s_ = io.load(f)
         if not s_.fine:

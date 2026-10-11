@@ -28,6 +28,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from common import finite_float, positive_int
+
 from sensing import detect, io  # noqa: E402
 
 OUT = ROOT / "out"
@@ -45,11 +47,11 @@ def countdown(sec: int, msg: str) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--iface", default="en0")
-    ap.add_argument("--empty", type=int, default=60, help="seconds of empty room at start")
-    ap.add_argument("--walk", type=int, default=40, help="seconds of walking")
-    ap.add_argument("--still", type=int, default=40, help="seconds standing still")
-    ap.add_argument("--empty2", type=int, default=60, help="seconds empty at end")
-    ap.add_argument("--threshold", type=float, default=None)
+    ap.add_argument("--empty", type=positive_int, default=60, help="seconds of empty room at start")
+    ap.add_argument("--walk", type=positive_int, default=40, help="seconds of walking")
+    ap.add_argument("--still", type=positive_int, default=40, help="seconds standing still")
+    ap.add_argument("--empty2", type=positive_int, default=60, help="seconds empty at end")
+    ap.add_argument("--threshold", type=finite_float, default=None)
     ap.add_argument("--out", default=str(OUT / "walktest.jsonl"))
     args = ap.parse_args()
 
