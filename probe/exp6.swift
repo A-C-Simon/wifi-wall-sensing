@@ -21,8 +21,8 @@ func bench(_ label: String, _ n: Int, _ f: () -> Int) {
     let wall = now() - t
     var tr = 0
     for i in 1..<v.count where v[i] != v[i - 1] { tr += 1 }
-    print(String(format: "%@ n=%4d total=%6.3fs  %7.1f calls/s  mean=%6.2fms worst=%7.2fms  distinct=%2d changes=%3d",
-                 \(label), n, wall, Double(n)/wall, wall/Double(n)*1000,
+    print(label + String(format: " n=%4d total=%6.3fs  %7.1f calls/s  mean=%6.2fms worst=%7.2fms  distinct=%2d changes=%3d",
+                 n, wall, Double(n)/wall, wall/Double(n)*1000,
                  worst*1000, Set(v).count, tr))
     print("      values: \(Set(v).sorted().prefix(16).map(String.init).joined(separator: ","))")
 }
