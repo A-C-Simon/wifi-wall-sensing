@@ -35,9 +35,13 @@ print("bssid         : \(iface.bssid() ?? "<nil: TCC redaction>")")
 print("\n== Q2/Q3: tight-loop poll, 5000 samples, no sleep ==")
 var samples: [Int] = []
 var stamps: [Double] = []
+var callMilliseconds: [Double] = []
 let t0 = now()
 for i in 0..<5000 {
-    samples.append(iface.rssiValue())
+    let started = now()
+    let sample = iface.rssiValue()
+    callMilliseconds.append((now() - started) * 1000)
+    samples.append(sample)
     stamps.append(now() - t0)
     if i % 1000 == 0 {
         print(String(format: "  t=%7.3fs iter=%5d rssi=%3d rate=%.1f Hz",
@@ -64,7 +68,8 @@ for i in 1..<samples.count where samples[i] != samples[i - 1] { transitions += 1
 print(String(format: "TRANSITIONS   : %d/%d (%.1f%%)  <- >0%% = live register, 0%% = frozen",
              transitions, samples.count - 1,
              100.0 * Double(transitions) / Double(samples.count - 1)))
-print(String(format: "LATENCY  p50/p99: %.3f / %.3f ms", qAt(stamps.sorted(), 0.50), qAt(stamps.sorted(), 0.99)))
+let sortedCallMilliseconds = callMilliseconds.sorted()
+print(String(format: "LATENCY  p50/p99: %.3f / %.3f ms", qAt(sortedCallMilliseconds, 0.50), qAt(sortedCallMilliseconds, 0.99)))
 
 print("\n== Q4: multi-AP scan rate ==")
 for attempt in 1...3 {
