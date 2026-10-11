@@ -85,7 +85,7 @@ def cmd_heatmap(args) -> int:
         if not res:
             continue
         p, _ = res[0]
-        key = (round(p.x, 2), round(p.y, 2))
+        key = (p.x, p.y)
         visits[key] = visits.get(key, 0) + 1
     viz.plot_occupancy(rm, visits, str(OUT / "occupancy.png"))
     tot = sum(visits.values())

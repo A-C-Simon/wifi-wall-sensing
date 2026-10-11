@@ -10,6 +10,17 @@ from sensing import io
 
 
 class CaptureIOTests(unittest.TestCase):
+    def test_cell_paths_preserve_precision_and_read_legacy_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a = io.cell_capture_path(tmp, .001, 0, for_write=True)
+            b = io.cell_capture_path(tmp, .002, 0, for_write=True)
+            self.assertNotEqual(a, b)
+            legacy = Path(tmp) / "cell_2.9_0.0.jsonl"
+            legacy.touch()
+            self.assertEqual(io.cell_capture_path(tmp, 2.9000000000000004, 0), legacy)
+            self.assertNotEqual(io.cell_capture_path(tmp, 2.9000000000000004, 0,
+                                                     for_write=True), legacy)
+
     def test_corrupt_complete_records_have_file_and_line_context(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "capture"

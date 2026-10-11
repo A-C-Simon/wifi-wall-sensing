@@ -44,7 +44,7 @@ def cmd_calibrate(args) -> int:
     t_start = time.time()
     try:
         for idx, (x, y) in enumerate(cells):
-            f = raw_dir / f"cell_{x:.1f}_{y:.1f}.jsonl"
+            f = io.cell_capture_path(raw_dir, x, y, for_write=True)
             at = time.time() - t_start
             print(f"[{idx+1}/{len(cells)}] stand at x={x:.1f}m y={y:.1f}m "
                   f"for {hold:.0f}s   (starts {at/60:.1f} min in)", flush=True)
@@ -105,7 +105,7 @@ def separability_report(rm, raw_dir: Path, cells) -> str:
     # within-cell temporal noise
     noise = []
     for x, y in cells:
-        f = raw_dir / f"cell_{x:.1f}_{y:.1f}.jsonl"
+        f = io.cell_capture_path(raw_dir, x, y)
         if not f.exists():
             continue
         s = io.load(f)
@@ -193,8 +193,8 @@ def cmd_coarsen(args) -> int:
     if not np.isfinite(step) or step <= 0:
         print("coarse cell size must be finite and positive")
         return 1
-    ys = sorted({round(p.y, 3) for p in fine.points})
-    xs = sorted({round(p.x, 3) for p in fine.points})
+    ys = sorted({p.y for p in fine.points})
+    xs = sorted({p.x for p in fine.points})
     # Index arithmetic, not float accumulation: accumulating step in a while
     # loop put the tolerance on the wrong side of the comparison and silently
     # produced a single region instead of a grid.
@@ -208,7 +208,7 @@ def cmd_coarsen(args) -> int:
         # the lower centre, matching the previous exhaustive grid search.
         ix = min(nx - 1, max(0, int(np.ceil((p.x - xs[0]) / step - .5))))
         iy = min(ny - 1, max(0, int(np.ceil((p.y - ys[0]) / step - .5))))
-        c = (round(xs[0] + ix * step, 3), round(ys[0] + iy * step, 3))
+        c = (xs[0] + ix * step, ys[0] + iy * step)
         buckets.setdefault(c, []).append(p)
 
     out: list[radiomap.Fingerprint] = []

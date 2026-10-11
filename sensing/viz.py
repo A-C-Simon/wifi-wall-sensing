@@ -135,7 +135,7 @@ def plot_occupancy(rmap, visits, path, title="Inferred occupancy"):
         return
     xs = np.array([p.x for p in rmap.points])
     ys = np.array([p.y for p in rmap.points])
-    v = np.array([visits.get((round(x, 2), round(y, 2)), 0) for x, y in zip(xs, ys)],
+    v = np.array([visits.get((x, y), 0) for x, y in zip(xs, ys)],
                  dtype=float)
     cmap = LinearSegmentedColormap.from_list("occ", ["#08306b", "#2171b5", "#6baed6",
                                                     "#c6dbef", "#fee391", "#ec7014",

@@ -234,7 +234,7 @@ def cmd_validate_map(args) -> int:
     noise = []
     raw_dir = Path(args.raw_dir)
     for p in rm.points:
-        f = raw_dir / f"cell_{p.x:.1f}_{p.y:.1f}.jsonl"
+        f = io.cell_capture_path(raw_dir, p.x, p.y)
         if not f.exists():
             continue
         s_ = io.load(f)
@@ -319,7 +319,7 @@ def cmd_calibrate_distance(args) -> int:
 
     dists, rssis = [], []
     for d in pts:
-        f = OUT / f"dist_{d:.1f}m.jsonl"
+        f = OUT / f"dist_{d}m.jsonl"
         input(f"  stand {d:.1f} m from the access point, then press Enter... ")
         subprocess.run([str(CORE), "--iface", args.iface, "--out", str(f),
                         "--duration", str(hold), "--fine-hz", "20",

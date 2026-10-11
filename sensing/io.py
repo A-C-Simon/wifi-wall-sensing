@@ -62,6 +62,17 @@ def _key(ch: int, w: int) -> str:
     return f"{ch}/{w}"
 
 
+def cell_capture_path(root: str | Path, x: float, y: float, *, for_write=False) -> Path:
+    """Use round-trip coordinates; read old one-decimal filenames if needed."""
+    root = Path(root)
+    path = root / f"cell_{float(x)}_{float(y)}.jsonl"
+    if not for_write and not path.exists():
+        legacy = root / f"cell_{x:.1f}_{y:.1f}.jsonl"
+        if legacy.exists():
+            return legacy
+    return path
+
+
 def _number(value, name: str) -> float:
     try:
         valid = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
