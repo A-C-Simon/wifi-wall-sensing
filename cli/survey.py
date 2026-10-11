@@ -45,14 +45,16 @@ def cmd_calibrate(args) -> int:
     try:
         for idx, (x, y) in enumerate(cells):
             f = io.cell_capture_path(raw_dir, x, y, for_write=True)
+            input(f"[{idx+1}/{len(cells)}] stand at x={x:g}m y={y:g}m, "
+                  "then press Enter to record... ")
             at = time.time() - t_start
-            print(f"[{idx+1}/{len(cells)}] stand at x={x:.1f}m y={y:.1f}m "
+            print(f"[{idx+1}/{len(cells)}] recording x={x:g}m y={y:g}m "
                   f"for {hold:.0f}s   (starts {at/60:.1f} min in)", flush=True)
             subprocess.run([str(CORE), "--iface", args.iface, "--out", str(f),
                             "--duration", str(hold), "--fine-hz", "20", "--quiet"],
                            check=True)
             s = io.load(f)
-            fp = fingerprint_from_session(s, x, y)
+            fp = fingerprint_from_session(s, x, y, min_samples=max(2, args.sweeps))
             if fp:
                 fps.append(fp)
                 print(f"      {fp.n_samples} sweeps, {len(fp.rssi)} anchors", flush=True)
@@ -145,14 +147,15 @@ def separability_report(rm, raw_dir: Path, cells) -> str:
     return "\n".join(lines)
 
 
-def fingerprint_from_session(s, x: float, y: float) -> radiomap.Fingerprint | None:
+def fingerprint_from_session(s, x: float, y: float,
+                             min_samples: int = 2) -> radiomap.Fingerprint | None:
     """Average the fresh sweeps of one cell into a single fingerprint.
 
     Averaging is what makes this work at all: a raw sweep is quantised to 1 dB
     with only a handful of samples, so the per-anchor mean is a far more stable
     descriptor than any individual scan.
     """
-    if len(s.sweeps) < 2:
+    if len(s.sweeps) < min_samples:
         return None
     acc: dict[str, list[float]] = {}
     for sw in s.sweeps:
@@ -161,7 +164,7 @@ def fingerprint_from_session(s, x: float, y: float) -> radiomap.Fingerprint | No
     rssi = {k: sum(v) / len(v) for k, v in acc.items() if v}
     if len(rssi) < 5:
         return None
-    return radiomap.Fingerprint(x=x, y=y, label=f"{x:.0f},{y:.0f}",
+    return radiomap.Fingerprint(x=x, y=y, label=f"{x:g},{y:g}",
                                 t=s.sweeps[0].t, rssi=rssi, n_samples=len(s.sweeps))
 
 

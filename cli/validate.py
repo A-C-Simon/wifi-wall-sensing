@@ -320,7 +320,7 @@ def cmd_calibrate_distance(args) -> int:
     dists, rssis = [], []
     for d in pts:
         f = OUT / f"dist_{d}m.jsonl"
-        input(f"  stand {d:.1f} m from the access point, then press Enter... ")
+        input(f"  stand {d:g} m from the access point, then press Enter... ")
         subprocess.run([str(CORE), "--iface", args.iface, "--out", str(f),
                         "--duration", str(hold), "--fine-hz", "20",
                         "--no-sweep", "--quiet"], check=True)
