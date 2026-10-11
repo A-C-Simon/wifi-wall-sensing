@@ -243,8 +243,11 @@ let fineThread = Thread {
         let v = iface.rssiValue()
         if v >= 0 {
             fineStats["fine_errors"] = (fineStats["fine_errors"] ?? 0) + 1
-            usleep(5_000)
+            acc.removeAll(keepingCapacity: true)
+            changes = 0
+            bucketStart = mono()
             previous = nil
+            usleep(5_000)
             continue
         }
         if let prev = previous, prev != v { changes += 1 }
