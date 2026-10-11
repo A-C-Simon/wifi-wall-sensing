@@ -34,6 +34,28 @@ class CalibrationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             detect.detect(session([-60, -60]), win_s=20, calibration=baseline)
 
+    def test_malformed_baseline_values_raise_validation_errors(self):
+        baseline = detect.baseline_threshold(session([-60, -60]))
+        invalid = [None, [], dict(baseline, fine_center=None),
+                   dict(baseline, threshold="3"), dict(baseline, fine_scale=True),
+                   dict(baseline, sweep_keys=["a", "a"]),
+                   dict(baseline, sweep_keys=[[]]), dict(baseline, min_sweep_l1=float("nan"))]
+        for calibration in invalid:
+            with self.assertRaises(ValueError):
+                detect.validate_calibration(calibration, 10)
+
+    def test_calibration_preserves_custom_sweep_gate(self):
+        s = session(np.full(1000, -60))
+        s.sweeps = [io.Sweep(t, 0, {"a": -60 + i % 2})
+                    for i, t in enumerate(range(0, 50, 2))]
+        calibration = detect.baseline_threshold(s, min_sweep_l1=.5)
+        self.assertEqual(calibration["min_sweep_l1"], .5)
+        target = session(np.full(1000, -60))
+        target.sweeps = [io.Sweep(t, 0, {"a": -60 + 2 * (i % 2)})
+                         for i, t in enumerate(range(0, 50, 2))]
+        scored = detect.motion_score(target, calibration=calibration)
+        self.assertGreater(scored[3].max(), 0)
+
     def test_live_and_recorded_scores_match(self):
         from wifisense_live import scores
         s = session(np.sin(np.arange(1000) / 30) - 60)

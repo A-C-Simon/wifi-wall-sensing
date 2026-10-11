@@ -96,17 +96,30 @@ def _fine_energy(ft, rssi, sd, chg, win_s):
 
 
 def validate_calibration(calibration, win_s):
+    if not isinstance(calibration, dict):
+        raise ValueError("baseline must be an object")
     if calibration.get("score_version") != 2:
         raise ValueError("baseline uses an old score pipeline; record a new baseline")
     if calibration.get("win_s") != win_s:
         raise ValueError("baseline window differs from analysis window; record a matching baseline")
     for name in ("fine_center", "fine_scale", "sweep_reference", "threshold"):
-        if not np.isfinite(calibration.get(name, np.nan)):
+        value = calibration.get(name)
+        if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                or not np.isfinite(value)):
             raise ValueError(f"invalid baseline {name}")
     if calibration["fine_scale"] <= 0 or calibration["sweep_reference"] <= 0:
         raise ValueError("baseline scales must be positive")
     if not isinstance(calibration.get("sweep_keys"), list):
         raise ValueError("baseline must include its sweep anchor set")
+    keys = calibration["sweep_keys"]
+    if any(not isinstance(key, str) or not key for key in keys) or len(set(keys)) != len(keys):
+        raise ValueError("baseline anchor keys must be unique nonempty strings")
+    gate = calibration.get("min_sweep_l1", 3.0)
+    if (not isinstance(gate, (int, float)) or isinstance(gate, bool)
+            or not np.isfinite(gate) or gate < 0):
+        raise ValueError("baseline sweep gate must be finite and nonnegative")
+    if calibration["fine_center"] < 0 or calibration["threshold"] <= 0:
+        raise ValueError("baseline center must be nonnegative and threshold must be positive")
 
 
 def motion_score_arrays(ft, rssi, sd, chg, st, mat, win_s=10.0,
@@ -134,6 +147,7 @@ def fuse_scores(ft, energy, st, mat, min_sweep_l1=3.0, calibration=None):
         fine_score = F.zscore_robust(energy)
     else:
         fine_score = (energy - calibration["fine_center"]) / calibration["fine_scale"]
+        min_sweep_l1 = calibration.get("min_sweep_l1", 3.0)
 
     sweep_score = np.zeros(len(ft))
     sweep_l1 = np.zeros(len(ft))
@@ -177,6 +191,10 @@ def baseline_threshold(session, win_s: float = 10.0, k: float = 6.0,
     unoccupied, then inflated by `k` robust sigmas to bound the false-alarm
     rate. Returns the distribution so the calibration can be audited.
     """
+    if not np.isfinite(k) or k <= 0:
+        raise ValueError("baseline k must be finite and positive")
+    if not np.isfinite(min_sweep_l1) or min_sweep_l1 < 0:
+        raise ValueError("sweep gate must be finite and nonnegative")
     if not session.fine:
         return {}
     ft = np.array([f.t for f in session.fine])
@@ -194,7 +212,7 @@ def baseline_threshold(session, win_s: float = 10.0, k: float = 6.0,
     reference = max(min_sweep_l1, float(np.median(sf[:, 0])) if len(sf) else 0., 1e-9)
     params = {"score_version": 2, "win_s": win_s, "fine_center": center,
               "fine_scale": scale, "sweep_reference": reference,
-              "sweep_keys": keys, "threshold": 0.0}
+              "sweep_keys": keys, "min_sweep_l1": min_sweep_l1, "threshold": 1.0}
     ft, motion, fine, sweep, _l1, interval, frate = motion_score(
         session, win_s, min_sweep_l1, params)
     thr = F.auto_threshold(motion, k=k)
