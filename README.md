@@ -436,6 +436,14 @@ verdict. Repeatability compares matched positions on the same measured anchor
 set in both surveys. Map matching prepares its matrix once for repeated
 queries, and separation checks reduce cell pairs in bounded memory.
 
+Heatmaps count accepted fingerprint matches per cell. Occupancy requires
+independent presence evidence. The heatmap is saved as
+`out/fingerprint_heatmap.png`, keeping the occupancy protocol plot separate.
+
+The grid survey waits for Enter at each cell before recording and enforces
+the requested sweep count. Capture filenames and heatmap keys preserve cell
+coordinates so a fine grid does not merge through decimal rounding.
+
 ---
 
 ## Validation protocol

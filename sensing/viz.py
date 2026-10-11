@@ -120,10 +120,10 @@ def plot_radio_map(rmap, path):
     plt.close(fig)
 
 
-def plot_occupancy(rmap, visits, path, title="Inferred occupancy"):
-    """Render the 'sees through walls' view: which cells were occupied.
+def plot_occupancy(rmap, visits, path, title="Fingerprint matches per cell"):
+    """Render accepted fingerprint matches, without inferring presence.
 
-    visits: dict[(x,y)] -> count of detections attributed to that cell.
+    visits: dict[(x,y)] -> count of scans attributed to that cell.
     """
     fig, ax = plt.subplots(figsize=(8, 7))
     if not rmap.points:
@@ -146,7 +146,7 @@ def plot_occupancy(rmap, visits, path, title="Inferred occupancy"):
         ax.annotate(f"{int(vv)}", (x, y), ha="center", va="center", fontsize=9,
                     color="white" if vv > v.max() * 0.55 else "black")
     cb = fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.03)
-    cb.set_label("detections", fontsize=8)
+    cb.set_label("matched scans", fontsize=8)
     _grid(ax, xlabel="x (m)", ylabel="y (m)", title=title)
     ax.set_aspect("equal", adjustable="datalim")
     fig.tight_layout()

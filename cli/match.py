@@ -87,12 +87,12 @@ def cmd_heatmap(args) -> int:
         p, _ = res[0]
         key = (p.x, p.y)
         visits[key] = visits.get(key, 0) + 1
-    viz.plot_occupancy(rm, visits, str(OUT / "occupancy.png"))
+    viz.plot_occupancy(rm, visits, str(OUT / "fingerprint_heatmap.png"))
     tot = sum(visits.values())
     print(f"attributed {tot} sweeps to {len(visits)} cells")
     for k, v in sorted(visits.items(), key=lambda kv: -kv[1]):
         print(f"   cell {k}: {v}")
-    print(f"wrote {OUT/'occupancy.png'}")
+    print(f"wrote {OUT/'fingerprint_heatmap.png'}")
     return 0
 
 
