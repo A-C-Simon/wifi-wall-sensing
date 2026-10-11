@@ -25,11 +25,20 @@ func startPings(_ gw: String, _ n: Int) -> [Process] {
     for _ in 0..<n {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/sbin/ping")
-        p.arguments = ["-i", "0.2", "-t", gw]
+        p.arguments = ["-i", "0.2", gw]
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
-        try? p.run()
-        procs.append(p)
+        do {
+            try p.run()
+            procs.append(p)
+        } catch {
+            for running in procs {
+                if running.isRunning { running.terminate() }
+                running.waitUntilExit()
+            }
+            FileHandle.standardError.write(Data("Could not start ping: \(error)\n".utf8))
+            exit(2)
+        }
     }
     return procs
 }
@@ -38,12 +47,10 @@ func capture(_ secs: Double) -> ([Double], [Int]) {
     var t: [Double] = []
     var r: [Int] = []
     let t0 = now()
-    var prev = 0
     while now() - t0 < secs {
         let v = iface.rssiValue()
         t.append(now() - t0)
         r.append(v)
-        prev = v
     }
     return (t, r)
 }
@@ -78,7 +85,14 @@ usleep(1_000_000)
 let (t1a, r1a) = capture(20)
 report("  8x ping", t1a, r1a)
 
-for p in pings { p.terminate() }
+for p in pings {
+    if p.isRunning { p.terminate() }
+    p.waitUntilExit()
+    guard p.terminationStatus == 0 || p.terminationReason == .uncaughtSignal else {
+        FileHandle.standardError.write(Data("Ping failed; traffic comparison is invalid\n".utf8))
+        exit(2)
+    }
+}
 usleep(1_500_000)
 
 print("\n=== back to quiet, 20s (recovery check) ===")
