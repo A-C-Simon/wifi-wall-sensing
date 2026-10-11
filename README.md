@@ -468,15 +468,16 @@ the on-screen countdown rather than from a chat message.
 - `set_theta_zero_location('N')` + `set_theta_direction(-1)` does **not** give a
   clockwise-from-north frame on current matplotlib — 0° lands at the *bottom*.
   The radar is therefore Cartesian with explicit `x = r·sin(b)`, `y = r·cos(b)`.
-- A detector with a fixed 60 s detrend half-life accumulates AGC drift over a
-  long capture; an *empty* phase scored higher than the walk phase. Half-life
-  now scales with capture length.
+- Detrending must match between calibration and measurement. Its half-life
+  now depends on the analysis window, with a 120 s minimum, and stays fixed
+  regardless of capture length. Live filtering retains its state when the
+  display buffer rolls over.
 - Frame-to-frame multi-AP change is physically **stationary**, so normalising
   it by its own median beats a z-score, which drifts and eventually makes a
   quiet stretch look anomalous.
-- Leading NaNs in the anchor matrix must be back-filled as well as
-  forward-filled; one unfilled gap poisons the median of the whole sweep-change
-  series and silently zeroes the score.
+- Missing anchors must not poison sweep statistics or invent evidence.
+  Sweep features use measured shared anchors, and localization rejects
+  insufficient overlap. Completed scans never contribute to earlier times.
 - `String(format:)` with a `%@` and a raw `UnsafePointer<CChar>` is undefined
   behaviour and segfaults inside Foundation. Use string interpolation.
 - A VPN `utun` interface owning the default route makes `connect()`+`send()` to
